@@ -6,7 +6,6 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -222,18 +221,24 @@ func main() {
 			server[i].url = strings.Join(split, "/")
 		}
 
-		sort.Slice(client, func(i, j int) bool {
-			return client[i].url < client[j].url
-		})
-		sort.Slice(server, func(i, j int) bool {
-			return server[i].url < server[j].url
-		})
+		routes := make(map[string][2]route)
+		for _, r := range client {
+			m := routes[r.url]
+			m[0] = r
+			routes[r.url] = m
+		}
+		for _, r := range server {
+			m := routes[r.url]
+			m[1] = r
+			routes[r.url] = m
+		}
 
 		error := func(c, s route) {
 			fmt.Fprintf(os.Stderr, "proble with client function %s (%s) or server function %s (%s)\n", c.functionName, c.url, s.functionName, s.url)
 		}
-		for i := range client {
-			c, s := client[i], server[i]
+		for url := range routes {
+			m := routes[url]
+			c, s := m[0], m[1]
 			if c.url != s.url {
 				error(c, s)
 				fmt.Fprintf(os.Stderr, "missing route: client has url %s, server has url %s\n", c.url, s.url)
