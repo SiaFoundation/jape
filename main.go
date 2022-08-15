@@ -6,6 +6,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -57,11 +58,6 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 			for _, param := range v.Type.Params.List {
 				r.requestTypes = append(r.requestTypes, info.Types[param.Type].Type.String())
 			}
-			for _, result := range v.Type.Results.List {
-				if types.ExprString(result.Type) != "error" {
-					r.responseType = info.Types[result.Type].Type.String()
-				}
-			}
 
 			for _, v := range v.Body.List {
 				switch v := v.(type) {
@@ -74,18 +70,26 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 
 					switch v := v.Rhs[0].(type) {
 					case *ast.CallExpr:
-						if len(v.Args) < 1 {
+						if len(v.Args) < 2 {
 							continue
 						}
 
 						if expr, ok := v.Args[0].(*ast.BasicLit); ok {
-							r.url = expr.Value
+							url, err := strconv.Unquote(expr.Value)
+							if err != nil {
+								continue
+							}
+							r.url = url
 						} else if expr, ok := v.Args[0].(*ast.CallExpr); ok {
 							if len(expr.Args) == 0 {
 								continue
 							}
 							// if fmt.Sprintf, get first argument (format string)
-							r.url = types.ExprString(expr.Args[0])
+							url, err := strconv.Unquote(types.ExprString(expr.Args[0]))
+							if err != nil {
+								continue
+							}
+							r.url = url
 						}
 
 						selector, ok := v.Fun.(*ast.SelectorExpr)
@@ -96,6 +100,11 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 						}
 						// c.get -> "GET". c.put -> "PUT", etc
 						r.method = strings.ToUpper(selector.Sel.Name)
+
+						responseType := info.Types[v.Args[len(v.Args)-1]].Type
+						if pointer, ok := responseType.(*types.Pointer); ok {
+							r.responseType = pointer.Elem().String()
+						}
 					}
 				}
 			}
@@ -129,7 +138,11 @@ func parseServer(file *ast.File, info *types.Info) (routes []route) {
 				} else if len(call.Args) != 2 {
 					continue
 				}
-				r.url = call.Args[0].(*ast.BasicLit).Value
+				url, err := strconv.Unquote(call.Args[0].(*ast.BasicLit).Value)
+				if err != nil {
+					continue
+				}
+				r.url = url
 
 				selector, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
@@ -209,6 +222,7 @@ func main() {
 			if len(split) > 1 {
 				client[i].url = split[0]
 			}
+			client[i].url = strings.TrimPrefix(client[i].url, "/api")
 		}
 		// "/api/address/:id" -> "/api/address/%s"
 		for i := range server {
@@ -218,7 +232,7 @@ func main() {
 					split[i] = "%s"
 				}
 			}
-			server[i].url = strings.Join(split, "/")
+			server[i].url = strings.TrimPrefix(strings.Join(split, "/"), "/api")
 		}
 
 		routes := make(map[string][2]route)
@@ -234,7 +248,7 @@ func main() {
 		}
 
 		error := func(c, s route) {
-			fmt.Fprintf(os.Stderr, "proble with client function %s (%s) or server function %s (%s)\n", c.functionName, c.url, s.functionName, s.url)
+			fmt.Fprintf(os.Stderr, "problem with client function %s (%s) or server function %s (%s)\n", c.functionName, c.url, s.functionName, s.url)
 		}
 		for url := range routes {
 			m := routes[url]
