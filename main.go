@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -32,6 +33,38 @@ type route struct {
 
 	requestTypes []string
 	responseType string
+}
+
+func replaceAddStrings(expr *ast.BinaryExpr, str string) string {
+	if expr.Op != token.ADD {
+		return str
+	}
+
+	if _, ok := expr.X.(*ast.BinaryExpr); ok {
+		str = replaceAddStrings(expr, str)
+	} else if _, ok := expr.X.(*ast.BasicLit); ok {
+		lit, err := strconv.Unquote(expr.X.(*ast.BasicLit).Value)
+		if err != nil {
+			return ""
+		}
+		str += lit
+	} else {
+		str += "%s"
+	}
+
+	if _, ok := expr.Y.(*ast.BinaryExpr); ok {
+		str = replaceAddStrings(expr, str)
+	} else if _, ok := expr.Y.(*ast.BasicLit); ok {
+		lit, err := strconv.Unquote(expr.Y.(*ast.BasicLit).Value)
+		if err != nil {
+			return ""
+		}
+		str += lit
+	} else {
+		str += "%s"
+	}
+
+	return str
 }
 
 func parseClient(file *ast.File, info *types.Info) (routes []route) {
@@ -70,7 +103,7 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 
 					switch v := v.Rhs[0].(type) {
 					case *ast.CallExpr:
-						if len(v.Args) < 2 {
+						if len(v.Args) < 1 {
 							continue
 						}
 
@@ -90,6 +123,8 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 								continue
 							}
 							r.url = url
+						} else if expr, ok := v.Args[0].(*ast.BinaryExpr); ok && expr.Op == token.ADD {
+							r.url = replaceAddStrings(expr, "")
 						}
 
 						selector, ok := v.Fun.(*ast.SelectorExpr)
@@ -101,9 +136,11 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 						// c.get -> "GET". c.put -> "PUT", etc
 						r.method = strings.ToUpper(selector.Sel.Name)
 
-						responseType := info.Types[v.Args[len(v.Args)-1]].Type
-						if pointer, ok := responseType.(*types.Pointer); ok {
-							r.responseType = pointer.Elem().String()
+						if r.method != "PUT" {
+							responseType := info.Types[v.Args[len(v.Args)-1]].Type
+							if pointer, ok := responseType.(*types.Pointer); ok {
+								r.responseType = pointer.Elem().String()
+							}
 						}
 					}
 				}
@@ -131,18 +168,23 @@ func parseServer(file *ast.File, info *types.Info) (routes []route) {
 					continue
 				}
 
-				var r route
 				call, ok := v.X.(*ast.CallExpr)
 				if !ok {
 					continue
 				} else if len(call.Args) != 2 {
 					continue
 				}
-				url, err := strconv.Unquote(call.Args[0].(*ast.BasicLit).Value)
-				if err != nil {
-					continue
+
+				var r route
+				if expr, ok := call.Args[0].(*ast.BasicLit); ok {
+					url, err := strconv.Unquote(expr.Value)
+					if err != nil {
+						continue
+					}
+					r.url = url
+				} else if expr, ok := call.Args[0].(*ast.BinaryExpr); ok && expr.Op == token.ADD {
+					r.url = replaceAddStrings(expr, "")
 				}
-				r.url = url
 
 				selector, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
@@ -201,7 +243,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		} else if len(pkgs) < 1 {
-			panic("failed to find any packages")
+			panic("Failed to find any packages")
 		}
 		api := pkgs[0]
 
@@ -218,17 +260,24 @@ func main() {
 		// standardize urls
 		// remove query strings
 		for i := range client {
-			split := strings.Split(client[i].url, "?")
-			if len(split) > 1 {
+			if split := strings.Split(client[i].url, "?"); len(split) > 1 {
 				client[i].url = split[0]
 			}
-			client[i].url = strings.TrimPrefix(client[i].url, "/api")
+
+			split := strings.Split(client[i].url, "/")
+			for i := range split {
+				// replace all format strings with %s
+				if strings.HasPrefix(split[i], "%") && len(split[i]) > 1 {
+					split[i] = "%s"
+				}
+			}
+			client[i].url = strings.TrimPrefix(strings.Join(split, "/"), "/api")
 		}
-		// "/api/address/:id" -> "/api/address/%s"
 		for i := range server {
 			split := strings.Split(server[i].url, "/")
 			for i := range split {
-				if strings.HasPrefix(split[i], ":") {
+				// "/api/address/:id" -> "/api/address/%s"
+				if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
 					split[i] = "%s"
 				}
 			}
@@ -237,31 +286,29 @@ func main() {
 
 		routes := make(map[string][2]route)
 		for _, r := range client {
-			m := routes[r.url]
+			key := r.method + " " + r.url
+			m := routes[key]
 			m[0] = r
-			routes[r.url] = m
+			routes[key] = m
 		}
 		for _, r := range server {
-			m := routes[r.url]
+			key := r.method + " " + r.url
+			m := routes[key]
 			m[1] = r
-			routes[r.url] = m
+			routes[key] = m
 		}
 
-		error := func(c, s route) {
-			fmt.Fprintf(os.Stderr, "problem with client function %s (%s) or server function %s (%s)\n", c.functionName, c.url, s.functionName, s.url)
-		}
 		for url := range routes {
 			m := routes[url]
 			c, s := m[0], m[1]
-			if c.url != s.url {
-				error(c, s)
-				fmt.Fprintf(os.Stderr, "missing route: client has url %s, server has url %s\n", c.url, s.url)
-			} else if c.method != s.method {
-				error(c, s)
-				fmt.Fprintf(os.Stderr, "client has method %s, server has method %s\n", c.method, s.method)
+			if len(c.url) == 0 && len(s.url) == 0 {
+				continue
+			} else if len(c.url) == 0 {
+				fmt.Fprintf(os.Stderr, "Client missing route found on server: %s %s \n", s.method, s.url)
+			} else if len(s.url) == 0 {
+				fmt.Fprintf(os.Stderr, "Server missing route found on client: %s %s\n", c.method, c.url)
 			} else if c.responseType != s.responseType {
-				error(c, s)
-				fmt.Fprintf(os.Stderr, "client has return type %s, server has return type %s\n", c.responseType, s.responseType)
+				fmt.Fprintf(os.Stderr, "Client has different return type (%s) than server (%s) on route %s\n", c.responseType, s.responseType, url)
 			}
 		}
 
