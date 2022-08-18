@@ -236,8 +236,8 @@ func main() {
 		}
 
 		// standardize urls
-		// remove query strings
 		for i := range client {
+			// remove query strings
 			if split := strings.Split(client[i].url, "?"); len(split) > 1 {
 				client[i].url = split[0]
 			}
@@ -262,32 +262,33 @@ func main() {
 			server[i].url = strings.TrimPrefix(strings.Join(split, "/"), "/api")
 		}
 
-		routes := make(map[string][2]route)
+		routes := make(map[string]struct{ c, s route })
 		for _, r := range client {
 			key := r.method + " " + r.url
+
 			m := routes[key]
-			m[0] = r
+			m.c = r
 			routes[key] = m
 		}
 		for _, r := range server {
 			key := r.method + " " + r.url
+
 			m := routes[key]
-			m[1] = r
+			m.s = r
 			routes[key] = m
 		}
 
 		var errors []string
 		for url := range routes {
 			m := routes[url]
-			c, s := m[0], m[1]
-			if len(c.url) == 0 && len(s.url) == 0 {
+			if len(m.c.url) == 0 && len(m.s.url) == 0 {
 				continue
-			} else if len(c.url) == 0 {
-				errors = append(errors, fmt.Sprintf("Client missing route found on server: %s %s", s.method, s.url))
-			} else if len(s.url) == 0 {
-				errors = append(errors, fmt.Sprintf("Server missing route found on client: %s %s", c.method, c.url))
-			} else if c.responseType != s.responseType {
-				errors = append(errors, fmt.Sprintf("Client has different return type (%s) than server (%s) on route %s", c.responseType, s.responseType, url))
+			} else if len(m.c.url) == 0 {
+				errors = append(errors, fmt.Sprintf("Client missing route found on server: %s %s", m.s.method, m.s.url))
+			} else if len(m.s.url) == 0 {
+				errors = append(errors, fmt.Sprintf("Server missing route found on client: %s %s", m.c.method, m.c.url))
+			} else if m.c.responseType != m.s.responseType {
+				errors = append(errors, fmt.Sprintf("Client has different return type (%s) than server (%s) on route %s", m.c.responseType, m.s.responseType, url))
 			}
 		}
 		sort.Slice(errors, func(i, j int) bool {
