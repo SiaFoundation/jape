@@ -7,6 +7,7 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,33 +36,36 @@ type route struct {
 	responseType string
 }
 
-func replaceAddStrings(expr *ast.BinaryExpr, str string) string {
-	if expr.Op != token.ADD {
-		return str
-	}
-
-	if _, ok := expr.X.(*ast.BinaryExpr); ok {
-		str = replaceAddStrings(expr, str)
-	} else if _, ok := expr.X.(*ast.BasicLit); ok {
-		lit, err := strconv.Unquote(expr.X.(*ast.BasicLit).Value)
+func exprToString(expr ast.Expr, info *types.Info, str string) string {
+	switch v := expr.(type) {
+	case *ast.BasicLit:
+		lit, err := strconv.Unquote(v.Value)
 		if err != nil {
 			return ""
 		}
 		str += lit
-	} else {
-		str += "%s"
-	}
-
-	if _, ok := expr.Y.(*ast.BinaryExpr); ok {
-		str = replaceAddStrings(expr, str)
-	} else if _, ok := expr.Y.(*ast.BasicLit); ok {
-		lit, err := strconv.Unquote(expr.Y.(*ast.BasicLit).Value)
-		if err != nil {
-			return ""
+	case *ast.BinaryExpr:
+		if v.Op != token.ADD {
+			break
 		}
-		str += lit
-	} else {
-		str += "%s"
+		str = exprToString(v.X, info, str)
+		str = exprToString(v.Y, info, str)
+	case *ast.CallExpr:
+		if len(v.Args) == 0 {
+			returnType, ok := info.Types[v].Type.(*types.Basic)
+			if !ok {
+				break
+			} else if returnType.Info() == types.IsString {
+				str += "%s"
+			}
+		} else if types.ExprString(v.Fun) == "fmt.Sprintf" {
+			// if Sprintf, get first argument
+			str = exprToString(v.Args[0], info, str)
+		}
+	case *ast.Ident:
+		if typ, ok := info.Types[v].Type.(*types.Basic); ok && typ.Info() == types.IsString {
+			str += "%s"
+		}
 	}
 
 	return str
@@ -107,25 +111,7 @@ func parseClient(file *ast.File, info *types.Info) (routes []route) {
 							continue
 						}
 
-						if expr, ok := v.Args[0].(*ast.BasicLit); ok {
-							url, err := strconv.Unquote(expr.Value)
-							if err != nil {
-								continue
-							}
-							r.url = url
-						} else if expr, ok := v.Args[0].(*ast.CallExpr); ok {
-							if len(expr.Args) == 0 {
-								continue
-							}
-							// if fmt.Sprintf, get first argument (format string)
-							url, err := strconv.Unquote(types.ExprString(expr.Args[0]))
-							if err != nil {
-								continue
-							}
-							r.url = url
-						} else if expr, ok := v.Args[0].(*ast.BinaryExpr); ok && expr.Op == token.ADD {
-							r.url = replaceAddStrings(expr, "")
-						}
+						r.url = exprToString(v.Args[0], info, "")
 
 						selector, ok := v.Fun.(*ast.SelectorExpr)
 						if !ok {
@@ -176,15 +162,7 @@ func parseServer(file *ast.File, info *types.Info) (routes []route) {
 				}
 
 				var r route
-				if expr, ok := call.Args[0].(*ast.BasicLit); ok {
-					url, err := strconv.Unquote(expr.Value)
-					if err != nil {
-						continue
-					}
-					r.url = url
-				} else if expr, ok := call.Args[0].(*ast.BinaryExpr); ok && expr.Op == token.ADD {
-					r.url = replaceAddStrings(expr, "")
-				}
+				r.url = exprToString(call.Args[0], info, "")
 
 				selector, ok := call.Fun.(*ast.SelectorExpr)
 				if !ok {
@@ -298,19 +276,26 @@ func main() {
 			routes[key] = m
 		}
 
+		var errors []string
 		for url := range routes {
 			m := routes[url]
 			c, s := m[0], m[1]
 			if len(c.url) == 0 && len(s.url) == 0 {
 				continue
 			} else if len(c.url) == 0 {
-				fmt.Fprintf(os.Stderr, "Client missing route found on server: %s %s \n", s.method, s.url)
+				errors = append(errors, fmt.Sprintf("Client missing route found on server: %s %s", s.method, s.url))
 			} else if len(s.url) == 0 {
-				fmt.Fprintf(os.Stderr, "Server missing route found on client: %s %s\n", c.method, c.url)
+				errors = append(errors, fmt.Sprintf("Server missing route found on client: %s %s", c.method, c.url))
 			} else if c.responseType != s.responseType {
-				fmt.Fprintf(os.Stderr, "Client has different return type (%s) than server (%s) on route %s\n", c.responseType, s.responseType, url)
+				errors = append(errors, fmt.Sprintf("Client has different return type (%s) than server (%s) on route %s", c.responseType, s.responseType, url))
 			}
 		}
+		sort.Slice(errors, func(i, j int) bool {
+			return errors[i] < errors[j]
+		})
 
+		for _, error := range errors {
+			fmt.Fprintln(os.Stderr, error)
+		}
 	}
 }
