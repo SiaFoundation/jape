@@ -1,10 +1,12 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"go/ast"
 	"go/token"
 	"go/types"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -212,91 +214,102 @@ func parseServer(file *ast.File, info *types.Info) (routes []route) {
 }
 
 func main() {
-	if len(os.Args) == 1 {
-		panic("Provide an API module directory to check")
+	log.SetFlags(0)
+	log.SetPrefix("checkapi: ")
+	flag.Usage = func() {
+		fmt.Fprintln(os.Stderr, "Usage: checkapi [flags] [directory]\n\nFlags:")
+		flag.PrintDefaults()
 	}
 
-	for _, arg := range os.Args[1:] {
-		pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo}, arg)
-		if err != nil {
-			panic(err)
-		} else if len(pkgs) < 1 {
-			panic("Failed to find any packages")
-		}
-		api := pkgs[0]
+	clientEndpointPrefix := flag.String("c", "/api", "client endpoint URL prefix to trim")
+	serverEndpointPrefix := flag.String("s", "/api", "server endpoint URL prefix to trim")
 
-		var client, server []route
-		for i, file := range api.Syntax {
-			base := filepath.Base(api.CompiledGoFiles[i])
-			if base == clientFilename {
-				client = parseClient(file, api.TypesInfo)
-			} else if base == serverFilename {
-				server = parseServer(file, api.TypesInfo)
+	flag.Parse()
+	args := flag.Args()
+	if len(args) == 0 {
+		flag.Usage()
+		return
+	}
+
+	pkgs, err := packages.Load(&packages.Config{Mode: packages.NeedName | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo}, args[0])
+	if err != nil {
+		panic(err)
+	} else if len(pkgs) < 1 {
+		panic("Failed to find any packages")
+	}
+	api := pkgs[0]
+
+	var client, server []route
+	for i, file := range api.Syntax {
+		base := filepath.Base(api.CompiledGoFiles[i])
+		if base == clientFilename {
+			client = parseClient(file, api.TypesInfo)
+		} else if base == serverFilename {
+			server = parseServer(file, api.TypesInfo)
+		}
+	}
+
+	// standardize urls
+	for i := range client {
+		// remove query strings
+		if split := strings.Split(client[i].url, "?"); len(split) > 1 {
+			client[i].url = split[0]
+		}
+
+		split := strings.Split(client[i].url, "/")
+		for i := range split {
+			// replace all format strings with %s
+			if strings.HasPrefix(split[i], "%") && len(split[i]) > 1 {
+				split[i] = "%s"
 			}
 		}
-
-		// standardize urls
-		for i := range client {
-			// remove query strings
-			if split := strings.Split(client[i].url, "?"); len(split) > 1 {
-				client[i].url = split[0]
-			}
-
-			split := strings.Split(client[i].url, "/")
-			for i := range split {
-				// replace all format strings with %s
-				if strings.HasPrefix(split[i], "%") && len(split[i]) > 1 {
-					split[i] = "%s"
-				}
-			}
-			client[i].url = strings.TrimPrefix(strings.Join(split, "/"), "/api")
-		}
-		for i := range server {
-			split := strings.Split(server[i].url, "/")
-			for i := range split {
-				// "/api/address/:id" -> "/api/address/%s"
-				if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
-					split[i] = "%s"
-				}
-			}
-			server[i].url = strings.TrimPrefix(strings.Join(split, "/"), "/api")
-		}
-
-		routes := make(map[string]struct{ c, s route })
-		for _, r := range client {
-			key := r.method + " " + r.url
-
-			m := routes[key]
-			m.c = r
-			routes[key] = m
-		}
-		for _, r := range server {
-			key := r.method + " " + r.url
-
-			m := routes[key]
-			m.s = r
-			routes[key] = m
-		}
-
-		var errors []string
-		for url := range routes {
-			m := routes[url]
-			if len(m.c.url) == 0 && len(m.s.url) == 0 {
-				continue
-			} else if len(m.c.url) == 0 {
-				errors = append(errors, fmt.Sprintf("Client missing route found on server: %s %s", m.s.method, m.s.url))
-			} else if len(m.s.url) == 0 {
-				errors = append(errors, fmt.Sprintf("Server missing route found on client: %s %s", m.c.method, m.c.url))
-			} else if m.c.responseType != m.s.responseType {
-				errors = append(errors, fmt.Sprintf("Client has different return type (%s) than server (%s) on route %s", m.c.responseType, m.s.responseType, url))
+		client[i].url = strings.TrimPrefix(strings.Join(split, "/"), *clientEndpointPrefix)
+	}
+	for i := range server {
+		split := strings.Split(server[i].url, "/")
+		for i := range split {
+			// "/api/address/:id" -> "/api/address/%s"
+			if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
+				split[i] = "%s"
 			}
 		}
-		sort.Slice(errors, func(i, j int) bool {
-			return errors[i] < errors[j]
-		})
+		server[i].url = strings.TrimPrefix(strings.Join(split, "/"), *serverEndpointPrefix)
+	}
 
-		for _, error := range errors {
-			fmt.Fprintln(os.Stderr, error)
+	routes := make(map[string]struct{ c, s route })
+	for _, r := range client {
+		key := r.method + " " + r.url
+
+		m := routes[key]
+		m.c = r
+		routes[key] = m
+	}
+	for _, r := range server {
+		key := r.method + " " + r.url
+
+		m := routes[key]
+		m.s = r
+		routes[key] = m
+	}
+
+	var errors []string
+	for url := range routes {
+		m := routes[url]
+		if len(m.c.url) == 0 && len(m.s.url) == 0 {
+			continue
+		} else if len(m.c.url) == 0 {
+			errors = append(errors, fmt.Sprintf("Client missing route found on server: %s %s", m.s.method, m.s.url))
+		} else if len(m.s.url) == 0 {
+			errors = append(errors, fmt.Sprintf("Server missing route found on client: %s %s", m.c.method, m.c.url))
+		} else if m.c.responseType != m.s.responseType {
+			errors = append(errors, fmt.Sprintf("Client has different return type (%s) than server (%s) on route %s", m.c.responseType, m.s.responseType, url))
 		}
+	}
+	sort.Slice(errors, func(i, j int) bool {
+		return errors[i] < errors[j]
+	})
+
+	for _, error := range errors {
+		fmt.Fprintln(os.Stderr, error)
 	}
 }
