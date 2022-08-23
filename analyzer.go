@@ -1,4 +1,4 @@
-package main
+package checkapi
 
 import (
 	"errors"
@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
-	"golang.org/x/tools/go/analysis/singlechecker"
 )
 
 const Doc = `compare client and server API routes
@@ -19,7 +18,7 @@ The checkapi analysis reports mismatches between the API endpoints
 defined by a server and the methods defined by a client.
 `
 
-var apiAnalyzer = &analysis.Analyzer{
+var ApiAnalyzer = &analysis.Analyzer{
 	Name:             "checkapi",
 	Doc:              Doc,
 	Run:              run,
@@ -30,16 +29,16 @@ var clientPrefix string
 var serverPrefix string
 
 func init() {
-	apiAnalyzer.Flags.StringVar(&clientPrefix, "cprefix", "", "client endpoint URL prefix to trim")
-	apiAnalyzer.Flags.StringVar(&serverPrefix, "sprefix", "", "server endpoint URL prefix to trim")
+	ApiAnalyzer.Flags.StringVar(&clientPrefix, "cprefix", "", "client endpoint URL prefix to trim")
+	ApiAnalyzer.Flags.StringVar(&serverPrefix, "sprefix", "", "server endpoint URL prefix to trim")
 }
 
 type route struct {
-	url          string
-	method       string
-	functionName string
+	url    string
+	method string
+	// functionName string
 
-	requestTypes []string
+	// requestTypes []string
 	responseType string
 
 	seen bool
@@ -86,80 +85,65 @@ func parseServer(file *ast.File, info *types.Info) (routes map[string]*route) {
 	routes = make(map[string]*route)
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch v := n.(type) {
-		case *ast.FuncDecl:
-			if v.Name == nil || v.Name.Name != "NewServer" {
+		case *ast.CallExpr:
+			selector, ok := v.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return false
+			} else if typ, ok := info.Types[selector.X]; !ok || typ.Type.String() != "*github.com/julienschmidt/httprouter.Router" {
 				return false
 			}
 
-			for _, v := range v.Body.List {
-				v, ok := v.(*ast.ExprStmt)
-				if !ok {
-					continue
+			// standardize url
+			url := exprToString(v.Args[0], info, "")
+			split := strings.Split(url, "/")
+			for i := range split {
+				// "/api/address/:id" -> "/api/address/%s"
+				if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
+					split[i] = "%s"
 				}
-
-				call, ok := v.X.(*ast.CallExpr)
-				if !ok {
-					continue
-				} else if len(call.Args) != 2 {
-					continue
-				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
-				if !ok {
-					continue
-				}
-
-				// standardize url
-				url := exprToString(call.Args[0], info, "")
-				split := strings.Split(url, "/")
-				for i := range split {
-					// "/api/address/:id" -> "/api/address/%s"
-					if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
-						split[i] = "%s"
-					}
-				}
-				url = strings.TrimPrefix(strings.Join(split, "/"), serverPrefix)
-
-				r := &route{
-					url:          url,
-					method:       selector.Sel.Name,
-					functionName: call.Args[1].(*ast.SelectorExpr).Sel.Name,
-				}
-
-				for _, v := range file.Decls {
-					switch v := v.(type) {
-					case *ast.FuncDecl:
-						if v.Recv == nil {
-							continue
-						} else if len(v.Recv.List) != 1 {
-							continue
-						} else if types.ExprString(v.Recv.List[0].Type) != "*server" {
-							continue
-						} else if v.Name == nil {
-							continue
-						} else if v.Name.Name != r.functionName {
-							continue
-						}
-
-						for _, v := range v.Body.List {
-							v, ok := v.(*ast.ExprStmt)
-							if !ok {
-								continue
-							}
-							call, ok := v.X.(*ast.CallExpr)
-							if !ok {
-								continue
-							} else if ident, ok := call.Fun.(*ast.Ident); !ok || ident.Name != "WriteJSON" {
-								continue
-							} else if len(call.Args) != 2 {
-								continue
-							}
-							r.responseType = info.Types[call.Args[1]].Type.String()
-						}
-					}
-				}
-
-				routes[r.String()] = r
 			}
+			url = strings.TrimPrefix(strings.Join(split, "/"), serverPrefix)
+
+			r := &route{
+				url:    url,
+				method: selector.Sel.Name,
+			}
+
+			functionName := v.Args[1].(*ast.SelectorExpr).Sel.Name
+			for _, v := range file.Decls {
+				switch v := v.(type) {
+				case *ast.FuncDecl:
+					if v.Recv == nil {
+						continue
+					} else if len(v.Recv.List) != 1 {
+						continue
+					} else if types.ExprString(v.Recv.List[0].Type) != "*server" {
+						continue
+					} else if v.Name == nil {
+						continue
+					} else if v.Name.Name != functionName {
+						continue
+					}
+
+					for _, v := range v.Body.List {
+						v, ok := v.(*ast.ExprStmt)
+						if !ok {
+							continue
+						}
+						call, ok := v.X.(*ast.CallExpr)
+						if !ok {
+							continue
+						} else if ident, ok := call.Fun.(*ast.Ident); !ok || ident.Name != "WriteJSON" {
+							continue
+						} else if len(call.Args) != 2 {
+							continue
+						}
+						r.responseType = info.Types[call.Args[1]].Type.String()
+					}
+				}
+			}
+
+			routes[r.String()] = r
 		}
 		return true
 	})
@@ -187,54 +171,30 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	routes := parseServer(serverFile, pass.TypesInfo)
 	ast.Inspect(clientFile, func(n ast.Node) bool {
 		switch v := n.(type) {
-		case *ast.FuncDecl:
-			if v.Recv == nil || v.Name == nil || v.Type == nil ||
-				len(v.Recv.List) != 1 ||
-				types.ExprString(v.Recv.List[0].Type) != "*Client" ||
-				!ast.IsExported(v.Name.Name) {
+		case *ast.CallExpr:
+			var r route
+			if len(v.Args) < 1 {
 				return false
 			}
+			r.url = exprToString(v.Args[0], pass.TypesInfo, "")
 
-			r := route{
-				functionName: v.Name.Name,
+			selector, ok := v.Fun.(*ast.SelectorExpr)
+			if !ok {
+				return false
+			} else if selector.Sel == nil || selector.X == nil {
+				return false
+			} else if typ, ok := pass.TypesInfo.Types[selector.X]; !ok || !(strings.HasPrefix(typ.Type.String(), "*") && strings.HasSuffix(typ.Type.String(), "/api.Client")) {
+				return false
+			} else if selector.Sel.Name != "get" && selector.Sel.Name != "post" && selector.Sel.Name != "put" && selector.Sel.Name != "delete" {
+				return false
 			}
-			for _, param := range v.Type.Params.List {
-				r.requestTypes = append(r.requestTypes, pass.TypesInfo.Types[param.Type].Type.String())
-			}
+			// c.get -> "GET". c.put -> "PUT", etc
+			r.method = strings.ToUpper(selector.Sel.Name)
 
-			for _, v := range v.Body.List {
-				switch v := v.(type) {
-				case *ast.AssignStmt:
-					if len(v.Lhs) != 1 || len(v.Rhs) != 1 {
-						continue
-					} else if types.ExprString(v.Lhs[0]) != "err" {
-						continue
-					}
-
-					switch v := v.Rhs[0].(type) {
-					case *ast.CallExpr:
-						if len(v.Args) < 1 {
-							continue
-						}
-
-						r.url = exprToString(v.Args[0], pass.TypesInfo, "")
-
-						selector, ok := v.Fun.(*ast.SelectorExpr)
-						if !ok {
-							continue
-						} else if selector.Sel == nil {
-							continue
-						}
-						// c.get -> "GET". c.put -> "PUT", etc
-						r.method = strings.ToUpper(selector.Sel.Name)
-
-						if r.method != "PUT" {
-							responseType := pass.TypesInfo.Types[v.Args[len(v.Args)-1]].Type
-							if pointer, ok := responseType.(*types.Pointer); ok {
-								r.responseType = pointer.Elem().String()
-							}
-						}
-					}
+			if r.method != "PUT" {
+				responseType := pass.TypesInfo.Types[v.Args[len(v.Args)-1]].Type
+				if pointer, ok := responseType.(*types.Pointer); ok {
+					r.responseType = pointer.Elem().String()
 				}
 			}
 
@@ -288,8 +248,4 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	}
 
 	return nil, nil
-}
-
-func main() {
-	singlechecker.Main(apiAnalyzer)
 }
