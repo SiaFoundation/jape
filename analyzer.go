@@ -224,7 +224,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 			}
 
-			if r.method != "PUT" {
+			if r.method != "PUT" && r.method != "DELETE" {
 				responseType := pass.TypesInfo.Types[v.Args[len(v.Args)-1]].Type
 				if pointer, ok := responseType.(*types.Pointer); ok {
 					r.responseType = pointer.Elem().String()
@@ -265,13 +265,13 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if r.requestType != sr.requestType {
 				pass.Report(analysis.Diagnostic{
 					Pos:     n.Pos(),
-					Message: fmt.Sprintf("Client has wrong request type for %v (got %s, should be %v)", r.url, r.requestType, sr.requestType),
+					Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", r, r.requestType, sr.requestType),
 				})
 			}
 			if r.responseType != sr.responseType {
 				pass.Report(analysis.Diagnostic{
 					Pos:     n.Pos(),
-					Message: fmt.Sprintf("Client has wrong response type for %v (got %s, should be %v)", r.url, r.responseType, sr.responseType),
+					Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", r, r.responseType, sr.responseType),
 				})
 			}
 		}
