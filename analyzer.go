@@ -36,9 +36,8 @@ func init() {
 type route struct {
 	url    string
 	method string
-	// functionName string
 
-	// requestTypes []string
+	requestType  string
 	responseType string
 
 	seen bool
@@ -110,39 +109,62 @@ func parseServer(file *ast.File, info *types.Info) (routes map[string]*route) {
 			}
 
 			functionName := v.Args[1].(*ast.SelectorExpr).Sel.Name
-			for _, v := range file.Decls {
-				switch v := v.(type) {
+			ast.Inspect(file, func(n ast.Node) bool {
+				switch v := n.(type) {
 				case *ast.FuncDecl:
 					if v.Recv == nil {
-						continue
+						return false
 					} else if len(v.Recv.List) != 1 {
-						continue
+						return false
 					} else if types.ExprString(v.Recv.List[0].Type) != "*server" {
-						continue
+						return false
 					} else if v.Name == nil {
-						continue
+						return false
 					} else if v.Name.Name != functionName {
-						continue
+						return false
 					}
 
-					for _, v := range v.Body.List {
-						v, ok := v.(*ast.ExprStmt)
-						if !ok {
-							continue
+					ast.Inspect(v, func(n ast.Node) bool {
+						switch v := n.(type) {
+						case *ast.CallExpr:
+							selector, ok := v.Fun.(*ast.SelectorExpr)
+							if !ok {
+								return false
+							} else if selector.Sel == nil || selector.Sel.Name != "Decode" {
+								return false
+							}
+
+							selectorCall, ok := selector.X.(*ast.CallExpr)
+							if !ok {
+								return false
+							} else if types.ExprString(selectorCall.Fun) != "json.NewDecoder" {
+								return false
+							}
+
+							requestType := info.Types[v.Args[0]].Type
+							if pointer, ok := requestType.(*types.Pointer); ok {
+								r.requestType = pointer.Elem().String()
+							}
 						}
-						call, ok := v.X.(*ast.CallExpr)
-						if !ok {
-							continue
-						} else if ident, ok := call.Fun.(*ast.Ident); !ok || ident.Name != "WriteJSON" {
-							continue
-						} else if len(call.Args) != 2 {
-							continue
+						return true
+					})
+
+					ast.Inspect(v, func(n ast.Node) bool {
+						switch v := n.(type) {
+						case *ast.CallExpr:
+							if ident, ok := v.Fun.(*ast.Ident); !ok || ident.Name != "WriteJSON" {
+								return false
+							} else if len(v.Args) != 2 {
+								return false
+							}
+							r.responseType = info.Types[v.Args[1]].Type.String()
+							return false
 						}
-						r.responseType = info.Types[call.Args[1]].Type.String()
-					}
+						return true
+					})
 				}
-			}
-
+				return true
+			})
 			routes[r.String()] = r
 		}
 		return true
@@ -191,10 +213,23 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			// c.get -> "GET". c.put -> "PUT", etc
 			r.method = strings.ToUpper(selector.Sel.Name)
 
-			if r.method != "PUT" {
+			if r.method != "GET" && r.method != "DELETE" {
+				if len(v.Args) >= 2 {
+					requestType := pass.TypesInfo.Types[v.Args[1]].Type
+					if pointer, ok := requestType.(*types.Pointer); ok {
+						r.requestType = pointer.Elem().String()
+					} else {
+						r.requestType = requestType.String()
+					}
+				}
+			}
+
+			if r.method != "PUT" && r.method != "DELETE" {
 				responseType := pass.TypesInfo.Types[v.Args[len(v.Args)-1]].Type
 				if pointer, ok := responseType.(*types.Pointer); ok {
 					r.responseType = pointer.Elem().String()
+				} else if responseType.String() != "untyped nil" {
+					r.responseType = responseType.String()
 				}
 			}
 
@@ -227,13 +262,18 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			}
 			sr.seen = true
+			if r.requestType != sr.requestType {
+				pass.Report(analysis.Diagnostic{
+					Pos:     n.Pos(),
+					Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", r, r.requestType, sr.requestType),
+				})
+			}
 			if r.responseType != sr.responseType {
 				pass.Report(analysis.Diagnostic{
 					Pos:     n.Pos(),
-					Message: fmt.Sprintf("Client has wrong response type for %v (should %v)", r.url, sr.responseType),
+					Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", r, r.responseType, sr.responseType),
 				})
 			}
-
 		}
 		return true
 	})
