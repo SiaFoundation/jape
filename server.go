@@ -86,14 +86,15 @@ func (c Context) DecodeParam(param string, v interface{}) bool {
 }
 
 // Check conditionally writes an error. If err is non-nil, Check prefixes it
-// with msg, writes it to the response body, and returns true. Otherwise it
-// returns false.
-func (c Context) Check(msg string, err error) bool {
+// with msg, writes it to the response body, and returns it. Otherwise it
+// returns nil.
+func (c Context) Check(msg string, err error) error {
 	if err != nil {
-		http.Error(c.ResponseWriter, fmt.Sprintf("%v: %v", msg, err), http.StatusInternalServerError)
-		return true
+		err = fmt.Errorf("%v: %w", msg, err)
+		http.Error(c.ResponseWriter, err.Error(), http.StatusInternalServerError)
+		return err
 	}
-	return false
+	return nil
 }
 
 // A Handler handles HTTP requests.
