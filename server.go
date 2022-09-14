@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/julienschmidt/httprouter"
@@ -60,8 +61,8 @@ func (c Context) PathParam(param string) string {
 	return c.PathParams.ByName(param)
 }
 
-// DecodeParam decodes the specified path parameter into v, which must be a
-// pointer value with one of the following methods:
+// DecodeParam decodes the specified path parameter into v, which must implement
+// one of the following methods:
 //
 //   UnmarshalText([]byte) error
 //   LoadString(string) error
@@ -80,6 +81,45 @@ func (c Context) DecodeParam(param string, v interface{}) bool {
 	}
 	if err != nil {
 		http.Error(c.ResponseWriter, fmt.Sprintf("couldn't parse param %q: %v", param, err), http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+// DecodeForm decodes the form value with the specified key into v, which must
+// implement one of the following methods:
+//
+//   UnmarshalText([]byte) error
+//   LoadString(string) error
+//
+// The following basic types are also supported:
+//
+//   *int
+//   *bool
+//
+// If decoding fails, DecodeForm writes an error to the response body and
+// returns false. If decoding succeeds, or if the form value is undefined, it
+// returns true.
+func (c Context) DecodeForm(key string, v interface{}) bool {
+	value := c.Request.FormValue(key)
+	if value == "" {
+		return true
+	}
+	var err error
+	switch v := v.(type) {
+	case interface{ UnmarshalText([]byte) error }:
+		err = v.UnmarshalText([]byte(value))
+	case interface{ LoadString(string) error }:
+		err = v.LoadString(value)
+	case *int:
+		*v, err = strconv.Atoi(value)
+	case *bool:
+		*v, err = strconv.ParseBool(value)
+	default:
+		panic(fmt.Sprintf("unsupported type %T", v))
+	}
+	if err != nil {
+		http.Error(c.ResponseWriter, fmt.Sprintf("invalid form value %q: %v", key, err), http.StatusBadRequest)
 		return false
 	}
 	return true
