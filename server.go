@@ -138,6 +138,11 @@ func (c Context) DecodeForm(key string, v interface{}) error {
 	return nil
 }
 
+// Custom is a no-op that simply declares the request and response types used by
+// a handler. This allows japecheck to be used on endpoints that do not speak
+// JSON.
+func (c Context) Custom(req, resp interface{}) {}
+
 // A Handler handles HTTP requests.
 type Handler func(Context)
 

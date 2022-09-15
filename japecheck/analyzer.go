@@ -38,8 +38,8 @@ type route struct {
 	method string
 	path   string
 
-	requestType  string
-	responseType string
+	request  ast.Expr
+	response ast.Expr
 
 	seen bool
 }
@@ -136,6 +136,10 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 			return true
 		} else {
 			switch sel.Sel.Name {
+			case "Custom":
+				// TODO: validate
+				r.request = call.Args[0]
+				r.response = call.Args[1]
 			case "Decode":
 				if r.method == "GET" || r.method == "DELETE" {
 					pass.Report(analysis.Diagnostic{
@@ -144,23 +148,21 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 					})
 					return false
 				}
-				p, ok := typeof(call.Args[0]).(*types.Pointer)
-				if !ok {
+				if _, ok := typeof(call.Args[0]).(*types.Pointer); !ok {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[0].Pos(),
 						Message: "Decode called on non-pointer value",
 					})
 					return false
 				}
-				argType := p.Elem().String()
-				if r.requestType != "" && r.requestType != argType {
+				if r.request != nil && !types.Identical(typeof(call.Args[0]), typeof(r.request)) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
-						Message: fmt.Sprintf("Decode called on %v, but was previously called on %v", argType, r.requestType),
+						Message: fmt.Sprintf("Decode called on %v, but was previously called on %v", typeof(call.Args[0]), typeof(r.request)),
 					})
 					return false
 				}
-				r.requestType = argType
+				r.request = call.Args[0]
 			case "Encode":
 				if r.method == "PUT" || r.method == "DELETE" {
 					pass.Report(analysis.Diagnostic{
@@ -169,21 +171,20 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 					})
 					return false
 				}
-				argType := typeof(call.Args[0]).String()
-				if r.responseType != "" && r.responseType != argType {
+				if r.response != nil && !types.Identical(typeof(call.Args[0]), typeof(r.response)) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
-						Message: fmt.Sprintf("Encode called on %v, but was previously called on %v", argType, r.responseType),
+						Message: fmt.Sprintf("Encode called on %v, but was previously called on %v", typeof(call.Args[0]), typeof(r.response)),
 					})
 					return false
 				}
-				r.responseType = argType
+				r.response = call.Args[0]
 			}
 			return false
 		}
 	})
 
-	if r.method == "GET" && r.responseType == "" {
+	if r.method == "GET" && r.response == nil {
 		pass.Report(analysis.Diagnostic{
 			Pos:     funcBody.Pos(),
 			Message: fmt.Sprintf("%v routes should write a response object", r.method),
@@ -195,41 +196,27 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 }
 
 func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
+	if call.Fun.(*ast.SelectorExpr).Sel.Name == "Custom" {
+		return &route{
+			method:   evalConstString(call.Args[0], pass.TypesInfo),
+			path:     strings.TrimPrefix(evalConstString(call.Args[1], pass.TypesInfo), clientPrefix),
+			request:  call.Args[2],
+			response: call.Args[3],
+		}
+	}
+
 	r := &route{
 		method: call.Fun.(*ast.SelectorExpr).Sel.Name,
 		path:   strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
 	}
-
-	req := func(arg ast.Expr) string {
-		t := pass.TypesInfo.Types[arg].Type
-		if p, ok := t.(*types.Pointer); ok {
-			return p.Elem().String()
-		} else if t == types.Typ[types.UntypedNil] {
-			return ""
-		}
-		return t.String()
-	}
-	resp := func(arg ast.Expr) string {
-		t := pass.TypesInfo.Types[arg].Type
-		if p, ok := t.(*types.Pointer); ok {
-			return p.Elem().String()
-		} else if t == types.Typ[types.UntypedNil] {
-			return ""
-		}
-		pass.Report(analysis.Diagnostic{
-			Pos:     arg.Pos(),
-			Message: "cannot decode response into non-pointer type",
-		})
-		return t.String()
-	}
 	switch r.method {
 	case "GET":
-		r.responseType = resp(call.Args[1])
+		r.response = call.Args[1]
 	case "POST":
-		r.requestType = req(call.Args[1])
-		r.responseType = resp(call.Args[2])
+		r.request = call.Args[1]
+		r.response = call.Args[2]
 	case "PUT":
-		r.requestType = req(call.Args[1])
+		r.request = call.Args[1]
 	}
 	return r
 }
@@ -335,7 +322,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Client" {
 			return true
-		} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" {
+		} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
 			return true
 		}
 		r := parseRouteCall(call, pass)
@@ -371,21 +358,31 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		}
 		sr.seen = true
 
-		if r.requestType != sr.requestType {
-			pass.Report(analysis.Diagnostic{
-				Pos:     call.Args[1].Pos(),
-				Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, r.requestType, sr.requestType),
-			})
-		}
-		if r.responseType != sr.responseType {
-			pos := call.Args[1].Pos()
-			if r.method == "POST" {
-				pos = call.Args[2].Pos()
+		if r.request != nil {
+			got := typeof(r.request)
+			want := typeof(sr.request)
+			if p, ok := want.(*types.Pointer); ok {
+				want = p.Elem()
 			}
-			pass.Report(analysis.Diagnostic{
-				Pos:     pos,
-				Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, r.responseType, sr.responseType),
-			})
+			if !types.Identical(got, want) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     r.request.Pos(),
+					Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, got, want),
+				})
+			}
+		}
+		if r.response != nil {
+			got := typeof(r.response)
+			want := types.Type(types.NewPointer(typeof(sr.response)))
+			if sr.response == nil {
+				want = types.Typ[types.UntypedNil]
+			}
+			if !types.Identical(got, want) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     r.response.Pos(),
+					Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, got, want),
+				})
+			}
 		}
 		return true
 	})

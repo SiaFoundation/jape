@@ -58,3 +58,8 @@ func (c *Client) PUT(route string, d interface{}) error { return c.req("PUT", ro
 
 // DELETE performs a DELETE request.
 func (c *Client) DELETE(route string) error { return c.req("DELETE", route, nil, nil) }
+
+// Custom is a no-op that simply declares the request and response types used by
+// a client method. This allows japecheck to be used on endpoints that do not
+// speak JSON.
+func (c *Client) Custom(method, route string, d, r interface{}) {}
