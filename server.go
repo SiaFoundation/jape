@@ -29,6 +29,22 @@ type Context struct {
 	PathParams     httprouter.Params
 }
 
+// Error writes err to the response body and returns it.
+func (c Context) Error(err error, status int) error {
+	http.Error(c.ResponseWriter, err.Error(), status)
+	return err
+}
+
+// Check conditionally writes an error. If err is non-nil, Check prefixes it
+// with msg, writes it to the response body (with status code 500), and returns
+// it. Otherwise it returns nil.
+func (c Context) Check(msg string, err error) error {
+	if err != nil {
+		return c.Error(fmt.Errorf("%v: %w", msg, err), http.StatusInternalServerError)
+	}
+	return nil
+}
+
 // Encode writes the JSON encoding of v to the response body.
 func (c Context) Encode(v interface{}) {
 	c.ResponseWriter.Header().Set("Content-Type", "application/json")
@@ -46,13 +62,12 @@ func (c Context) Encode(v interface{}) {
 }
 
 // Decode decodes the JSON of the request body into v. If decoding fails, Decode
-// writes an error to the response body and returns false.
-func (c Context) Decode(v interface{}) bool {
+// writes an error to the response body and returns it.
+func (c Context) Decode(v interface{}) error {
 	if err := json.NewDecoder(c.Request.Body).Decode(v); err != nil {
-		http.Error(c.ResponseWriter, fmt.Sprintf("couldn't decode request type (%T): %v", v, err), http.StatusBadRequest)
-		return false
+		return c.Error(fmt.Errorf("couldn't decode request type (%T): %w", v, err), http.StatusBadRequest)
 	}
-	return true
+	return nil
 }
 
 // PathParam returns the value of a path parameter. If the parameter is
@@ -68,8 +83,8 @@ func (c Context) PathParam(param string) string {
 //   LoadString(string) error
 //
 // If decoding fails, DecodeParam writes an error to the response body and
-// returns false.
-func (c Context) DecodeParam(param string, v interface{}) bool {
+// returns it.
+func (c Context) DecodeParam(param string, v interface{}) error {
 	var err error
 	switch v := v.(type) {
 	case interface{ UnmarshalText([]byte) error }:
@@ -80,10 +95,9 @@ func (c Context) DecodeParam(param string, v interface{}) bool {
 		panic("unsupported type")
 	}
 	if err != nil {
-		http.Error(c.ResponseWriter, fmt.Sprintf("couldn't parse param %q: %v", param, err), http.StatusBadRequest)
-		return false
+		return c.Error(fmt.Errorf("couldn't parse param %q: %w", param, err), http.StatusBadRequest)
 	}
-	return true
+	return nil
 }
 
 // DecodeForm decodes the form value with the specified key into v, which must
@@ -98,12 +112,12 @@ func (c Context) DecodeParam(param string, v interface{}) bool {
 //   *bool
 //
 // If decoding fails, DecodeForm writes an error to the response body and
-// returns false. If decoding succeeds, or if the form value is undefined, it
-// returns true.
-func (c Context) DecodeForm(key string, v interface{}) bool {
+// returns it. If the form value is empty, no error is returned and v is
+// unchanged.
+func (c Context) DecodeForm(key string, v interface{}) error {
 	value := c.Request.FormValue(key)
 	if value == "" {
-		return true
+		return nil
 	}
 	var err error
 	switch v := v.(type) {
@@ -119,20 +133,7 @@ func (c Context) DecodeForm(key string, v interface{}) bool {
 		panic(fmt.Sprintf("unsupported type %T", v))
 	}
 	if err != nil {
-		http.Error(c.ResponseWriter, fmt.Sprintf("invalid form value %q: %v", key, err), http.StatusBadRequest)
-		return false
-	}
-	return true
-}
-
-// Check conditionally writes an error. If err is non-nil, Check prefixes it
-// with msg, writes it to the response body, and returns it. Otherwise it
-// returns nil.
-func (c Context) Check(msg string, err error) error {
-	if err != nil {
-		err = fmt.Errorf("%v: %w", msg, err)
-		http.Error(c.ResponseWriter, err.Error(), http.StatusInternalServerError)
-		return err
+		return c.Error(fmt.Errorf("invalid form value %q: %w", key, err), http.StatusBadRequest)
 	}
 	return nil
 }
