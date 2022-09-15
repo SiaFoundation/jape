@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/ast/astutil"
 )
 
 const Doc = `enforce jape client/server parity
@@ -94,30 +95,34 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 	}
 
 	// lookup funcBody
+	gotoDef := func(id *ast.Ident) ast.Node {
+		obj := pass.TypesInfo.ObjectOf(id)
+		for _, file := range pass.Files {
+			path, _ := astutil.PathEnclosingInterval(file, obj.Pos(), obj.Pos())
+			if len(path) == 1 {
+				continue // not the right file
+			}
+			for _, n := range path {
+				if f, ok := n.(*ast.FuncDecl); ok && f.Name.Name == id.Name {
+					return f.Body
+				}
+			}
+		}
+		return nil
+	}
 	var funcBody ast.Node
 	switch v := kv.Value.(type) {
 	case *ast.FuncLit:
 		funcBody = v.Body
 	case *ast.Ident:
-		// lookup the ast.FuncDecl
-		//
-		// TODO: is there a more direct way of doing this? Also, this probably
-		// won't work if the handler is defined in a separate package.
-	outer:
-		for _, file := range pass.Files {
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if ok && fn.Name.Name == v.Name {
-					funcBody = fn.Body
-					break outer
-				}
-			}
-		}
+		funcBody = gotoDef(v)
+	case *ast.SelectorExpr:
+		funcBody = gotoDef(v.Sel)
 	}
 	if funcBody == nil {
 		pass.Report(analysis.Diagnostic{
 			Pos:     kv.Pos(),
-			Message: fmt.Sprintf("Server defines invalid route: %q", methodPath),
+			Message: "Could not locate handler definition",
 		})
 		return nil, false
 	}
@@ -200,7 +205,7 @@ func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
 		if p, ok := t.(*types.Pointer); ok {
 			return p.Elem().String()
 		} else if t == types.Typ[types.UntypedNil] {
-			return "nil"
+			return ""
 		}
 		return t.String()
 	}
@@ -209,7 +214,7 @@ func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
 		if p, ok := t.(*types.Pointer); ok {
 			return p.Elem().String()
 		} else if t == types.Typ[types.UntypedNil] {
-			return "nil"
+			return ""
 		}
 		pass.Report(analysis.Diagnostic{
 			Pos:     arg.Pos(),
