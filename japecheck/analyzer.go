@@ -34,17 +34,10 @@ func init() {
 	Analyzer.Flags.StringVar(&serverPrefix, "sprefix", "", "server endpoint URL prefix to trim")
 }
 
-type route struct {
-	method string
-	path   string
-
-	request  ast.Expr
-	response ast.Expr
-
-	seen bool
+func isPtr(t types.Type) bool {
+	_, ok := t.(*types.Pointer)
+	return ok
 }
-
-func (r route) String() string { return r.method + " " + r.path }
 
 func evalConstString(expr ast.Expr, info *types.Info) string {
 	switch v := expr.(type) {
@@ -71,14 +64,37 @@ func evalConstString(expr ast.Expr, info *types.Info) string {
 	}
 }
 
-func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
-	typeof := func(e ast.Expr) types.Type {
-		t, ok := pass.TypesInfo.Types[e]
-		if !ok {
-			return nil
+type serverParam struct {
+	name string
+	typ  types.Type
+}
+
+type serverRoute struct {
+	method string
+	path   string
+
+	pathParams  []serverParam
+	queryParams map[string]types.Type
+	request     types.Type
+	response    types.Type
+
+	seen bool
+}
+
+func (r serverRoute) String() string { return r.method + " " + r.path }
+
+func (r serverRoute) normalizedRoute() string {
+	split := strings.Split(r.path, "/")
+	for i := range split {
+		if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
+			split[i] = "%s"
 		}
-		return t.Type
 	}
+	return r.method + " " + strings.Join(split, "/")
+}
+
+func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, bool) {
+	typeof := func(e ast.Expr) types.Type { return pass.TypesInfo.TypeOf(e) }
 
 	methodPath := strings.Fields(evalConstString(kv.Key, pass.TypesInfo))
 	if len(methodPath) != 2 {
@@ -89,9 +105,16 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 		return nil, false
 	}
 
-	r := &route{
-		method: methodPath[0],
-		path:   strings.TrimPrefix(methodPath[1], serverPrefix),
+	r := &serverRoute{
+		method:      methodPath[0],
+		path:        strings.TrimPrefix(methodPath[1], serverPrefix),
+		queryParams: make(map[string]types.Type),
+	}
+	// parse path params
+	for _, param := range strings.Split(r.path, "/") {
+		if strings.HasPrefix(param, ":") || strings.HasPrefix(param, "*") {
+			r.pathParams = append(r.pathParams, serverParam{name: param[1:]})
+		}
 	}
 
 	// lookup funcBody
@@ -137,9 +160,64 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 		} else {
 			switch sel.Sel.Name {
 			case "Custom":
-				// TODO: validate
-				r.request = call.Args[0]
-				r.response = call.Args[1]
+				r.request = typeof(call.Args[0])
+				r.response = typeof(call.Args[1])
+				if r.request != types.Typ[types.UntypedNil] && !isPtr(r.request) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Args[0].Pos(),
+						Message: "request type must be a pointer",
+					})
+					return false
+				}
+				switch r.method {
+				case "GET":
+					if r.request != types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[0].Pos(),
+							Message: fmt.Sprintf("%v routes should not read a request object", r.method),
+						})
+						return false
+					}
+					if r.response == types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[0].Pos(),
+							Message: fmt.Sprintf("%v routes should write a response object", r.method),
+						})
+						return false
+					}
+				case "POST":
+				case "PUT":
+					if r.request == types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[0].Pos(),
+							Message: fmt.Sprintf("%v routes should read a request object", r.method),
+						})
+						return false
+					}
+					if r.response != types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[1].Pos(),
+							Message: fmt.Sprintf("%v routes should not write a response object", r.method),
+						})
+						return false
+					}
+				case "DELETE":
+					if r.request != types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[0].Pos(),
+							Message: fmt.Sprintf("%v routes should not read a request object", r.method),
+						})
+						return false
+					}
+					if r.response != nil {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[1].Pos(),
+							Message: fmt.Sprintf("%v routes should not write a response object", r.method),
+						})
+						return false
+					}
+				}
+
 			case "Decode":
 				if r.method == "GET" || r.method == "DELETE" {
 					pass.Report(analysis.Diagnostic{
@@ -148,21 +226,23 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 					})
 					return false
 				}
-				if _, ok := typeof(call.Args[0]).(*types.Pointer); !ok {
+				typ := typeof(call.Args[0])
+				if !isPtr(typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[0].Pos(),
 						Message: "Decode called on non-pointer value",
 					})
 					return false
 				}
-				if r.request != nil && !types.Identical(typeof(call.Args[0]), typeof(r.request)) {
+				if r.request != nil && !types.Identical(typ, r.request) {
 					pass.Report(analysis.Diagnostic{
-						Pos:     call.Pos(),
-						Message: fmt.Sprintf("Decode called on %v, but was previously called on %v", typeof(call.Args[0]), typeof(r.request)),
+						Pos:     call.Args[0].Pos(),
+						Message: fmt.Sprintf("Decode called on %v, but was previously called on %v", typ, r.request),
 					})
 					return false
 				}
-				r.request = call.Args[0]
+				r.request = typ
+
 			case "Encode":
 				if r.method == "PUT" || r.method == "DELETE" {
 					pass.Report(analysis.Diagnostic{
@@ -171,23 +251,102 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 					})
 					return false
 				}
-				if r.response != nil && !types.Identical(typeof(call.Args[0]), typeof(r.response)) {
+				typ := typeof(call.Args[0])
+				if r.response != nil && !types.Identical(typ, r.response) {
 					pass.Report(analysis.Diagnostic{
-						Pos:     call.Pos(),
-						Message: fmt.Sprintf("Encode called on %v, but was previously called on %v", typeof(call.Args[0]), typeof(r.response)),
+						Pos:     call.Args[0].Pos(),
+						Message: fmt.Sprintf("Encode called on %v, but was previously called on %v", typ, r.response),
 					})
 					return false
 				}
-				r.response = call.Args[0]
+				r.response = typ
+
+			case "DecodeForm":
+				name := evalConstString(call.Args[0], pass.TypesInfo)
+				typ := typeof(call.Args[1])
+				if prev, ok := r.queryParams[name]; ok && !types.Identical(prev, typ) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Pos(),
+						Message: fmt.Sprintf("form value %q decoded as %v, but was previously decoded as %v", name, typ, prev),
+					})
+					return false
+				}
+				r.queryParams[name] = typ
+
+			case "DecodeParam":
+				name := evalConstString(call.Args[0], pass.TypesInfo)
+				typ := typeof(call.Args[1])
+				var sp *serverParam
+				for i := range r.pathParams {
+					if r.pathParams[i].name == name {
+						sp = &r.pathParams[i]
+					}
+				}
+				if sp == nil {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Args[0].Pos(),
+						Message: fmt.Sprintf("DecodeParam called on param (%q) not present in route definition", name),
+					})
+					return false
+				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Args[1].Pos(),
+						Message: fmt.Sprintf("param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
+					})
+					return false
+				} else if !isPtr(typ) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Args[1].Pos(),
+						Message: "DecodeParam called on non-pointer value",
+					})
+					return false
+				}
+				sp.typ = typ
+
+			case "PathParam":
+				name := evalConstString(call.Args[0], pass.TypesInfo)
+				typ := types.NewPointer(types.Typ[types.String])
+				var sp *serverParam
+				for i := range r.pathParams {
+					if r.pathParams[i].name == name {
+						sp = &r.pathParams[i]
+					}
+				}
+				if sp == nil {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Args[0].Pos(),
+						Message: fmt.Sprintf("PathParam called on param (%q) not present in route definition", name),
+					})
+					return false
+				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Pos(),
+						Message: fmt.Sprintf("param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
+					})
+					return false
+				}
+				sp.typ = typ
 			}
-			return false
+			return true
 		}
 	})
+	if r.request == nil {
+		r.request = types.Typ[types.UntypedNil]
+	}
+	if r.response == nil {
+		r.response = types.Typ[types.UntypedNil]
+	}
 
-	if r.method == "GET" && r.response == nil {
+	if r.method == "GET" && r.response == types.Typ[types.UntypedNil] {
 		pass.Report(analysis.Diagnostic{
 			Pos:     funcBody.Pos(),
 			Message: fmt.Sprintf("%v routes should write a response object", r.method),
+		})
+		return nil, false
+	} else if r.method == "PUT" && r.request == types.Typ[types.UntypedNil] {
+		pass.Report(analysis.Diagnostic{
+			Pos:     funcBody.Pos(),
+			Message: fmt.Sprintf("%v routes should read a request object", r.method),
 		})
 		return nil, false
 	}
@@ -195,9 +354,35 @@ func parseRouteDef(kv *ast.KeyValueExpr, pass *analysis.Pass) (*route, bool) {
 	return r, true
 }
 
-func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
+type clientRoute struct {
+	method string
+	path   string
+
+	pathParams  []ast.Expr
+	queryParams map[string]ast.Expr
+	request     ast.Expr
+	response    ast.Expr
+}
+
+func (r clientRoute) String() string { return r.method + " " + r.path }
+
+func (r clientRoute) normalizedRoute() string {
+	path := r.path
+	if split := strings.Split(r.path, "?"); len(split) > 1 {
+		path = split[0]
+	}
+	split := strings.Split(path, "/")
+	for i := range split {
+		if strings.HasPrefix(split[i], "%") && len(split[i]) > 1 {
+			split[i] = "%s"
+		}
+	}
+	return r.method + " " + strings.Join(split, "/")
+}
+
+func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 	if call.Fun.(*ast.SelectorExpr).Sel.Name == "Custom" {
-		return &route{
+		return &clientRoute{
 			method:   evalConstString(call.Args[0], pass.TypesInfo),
 			path:     strings.TrimPrefix(evalConstString(call.Args[1], pass.TypesInfo), clientPrefix),
 			request:  call.Args[2],
@@ -205,9 +390,10 @@ func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
 		}
 	}
 
-	r := &route{
-		method: call.Fun.(*ast.SelectorExpr).Sel.Name,
-		path:   strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
+	r := &clientRoute{
+		method:      call.Fun.(*ast.SelectorExpr).Sel.Name,
+		path:        strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
+		queryParams: make(map[string]ast.Expr),
 	}
 	switch r.method {
 	case "GET":
@@ -218,6 +404,38 @@ func parseRouteCall(call *ast.CallExpr, pass *analysis.Pass) *route {
 	case "PUT":
 		r.request = call.Args[1]
 	}
+
+	if call, ok := call.Args[0].(*ast.CallExpr); ok {
+		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && types.ExprString(sel) == "fmt.Sprintf" {
+			nPath := strings.Count(r.path, "/%")
+			nForm := strings.Count(r.path, "=%")
+			if len(call.Args[1:]) != nPath+nForm {
+				pass.Report(analysis.Diagnostic{
+					Pos:     call.Pos(),
+					Message: fmt.Sprintf("route contains (%v path + %v form) = %v parameters, but only %v arguments are supplied", nPath, nForm, nPath+nForm, len(call.Args[1:])),
+				})
+				return nil
+			}
+			var queryParams []string
+			if i := strings.Index(r.path, "?"); i != -1 {
+				for _, part := range strings.Split(r.path[i+1:], "&") {
+					if i := strings.Index(part, "=%"); i == -1 {
+						continue // hard-coded form value
+					} else {
+						queryParams = append(queryParams, part[:i])
+					}
+				}
+			}
+			for i, arg := range call.Args[1:] {
+				if i < nPath {
+					r.pathParams = append(r.pathParams, arg)
+				} else {
+					r.queryParams[queryParams[i-nPath]] = arg
+				}
+			}
+		}
+	}
+
 	return r
 }
 
@@ -278,15 +496,11 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		if !ok {
 			return nil
 		}
-		t, ok := pass.TypesInfo.Types[e]
-		if !ok {
-			return nil
-		}
-		return t.Type
+		return pass.TypesInfo.TypeOf(e)
 	}
 
 	// parse server routes
-	routes := make(map[string]*route)
+	routes := make(map[string]*serverRoute)
 	done := false
 	ast.Inspect(serverFile, func(n ast.Node) bool {
 		if done {
@@ -295,19 +509,11 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 		for _, elt := range n.(*ast.CompositeLit).Elts {
-			r, ok := parseRouteDef(elt.(*ast.KeyValueExpr), pass)
+			r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
 			if !ok {
 				continue
 			}
-			// normalize path
-			split := strings.Split(r.path, "/")
-			for i := range split {
-				if strings.HasPrefix(split[i], ":") || strings.HasPrefix(split[i], "*") {
-					split[i] = "%s"
-				}
-			}
-			key := r.method + " " + strings.Join(split, "/")
-			routes[key] = r
+			routes[r.normalizedRoute()] = r
 		}
 		done = true
 		return false
@@ -325,73 +531,109 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
 			return true
 		}
-		r := parseRouteCall(call, pass)
-
-		// normalize path
-		path := r.path
-		if split := strings.Split(r.path, "?"); len(split) > 1 {
-			path = split[0]
+		cr := parseClientRoute(call, pass)
+		if cr == nil {
+			return true
 		}
-		split := strings.Split(path, "/")
-		for i := range split {
-			if strings.HasPrefix(split[i], "%") && len(split[i]) > 1 {
-				split[i] = "%s"
-			}
-		}
-		key := r.method + " " + strings.Join(split, "/")
 
 		// compare against server
-		sr, ok := routes[key]
+		sr, ok := routes[cr.normalizedRoute()]
 		if !ok {
 			pass.Report(analysis.Diagnostic{
 				Pos:     n.Pos(),
-				Message: fmt.Sprintf("Client references route not defined by server: %v", r),
+				Message: fmt.Sprintf("Client references route not defined by server: %v", cr),
 			})
 			return true
 		} else if sr.seen {
 			// TODO: maybe allow this?
 			pass.Report(analysis.Diagnostic{
 				Pos:     n.Pos(),
-				Message: fmt.Sprintf("Client references %v multiple times", r),
+				Message: fmt.Sprintf("Client references %v multiple times", cr),
 			})
 			return true
 		}
 		sr.seen = true
 
-		if r.request != nil {
-			got := typeof(r.request)
-			want := typeof(sr.request)
-			if p, ok := want.(*types.Pointer); ok {
-				want = p.Elem()
+		ptrTo := func(t types.Type) types.Type {
+			if t == types.Typ[types.UntypedNil] {
+				return t
 			}
+			return types.NewPointer(t)
+		}
+		elem := func(t types.Type) types.Type {
+			if t, ok := t.(*types.Pointer); ok {
+				return t.Elem()
+			}
+			return t
+		}
+
+		if cr.request != nil {
+			got := typeof(cr.request)
+			want := elem(sr.request)
 			if !types.Identical(got, want) {
 				pass.Report(analysis.Diagnostic{
-					Pos:     r.request.Pos(),
+					Pos:     cr.request.Pos(),
 					Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, got, want),
 				})
 			}
 		}
-		if r.response != nil {
-			got := typeof(r.response)
-			want := types.Type(types.NewPointer(typeof(sr.response)))
-			if sr.response == nil {
-				want = types.Typ[types.UntypedNil]
-			}
+		if cr.response != nil {
+			got := typeof(cr.response)
+			want := ptrTo(sr.response)
 			if !types.Identical(got, want) {
 				pass.Report(analysis.Diagnostic{
-					Pos:     r.response.Pos(),
+					Pos:     cr.response.Pos(),
 					Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, got, want),
 				})
 			}
 		}
+		for i := range sr.pathParams {
+			if i >= len(cr.pathParams) {
+				// TODO: this should be unreachable (routes[] lookup should fail)
+				pass.Report(analysis.Diagnostic{
+					Pos:     call.Pos(),
+					Message: fmt.Sprintf("Client has too few path parameters for %v", sr),
+				})
+				continue
+			}
+			cp := cr.pathParams[i]
+			sp := sr.pathParams[i]
+			got := typeof(cp)
+			want := elem(sp.typ)
+			if !types.Identical(got, want) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     cp.Pos(),
+					Message: fmt.Sprintf("Client has wrong type for path parameter %q (got %v, should be %v)", sp.name, got, want),
+				})
+			}
+		}
+		for name, arg := range cr.queryParams {
+			sq, ok := sr.queryParams[name]
+			if !ok {
+				pass.Report(analysis.Diagnostic{
+					Pos:     arg.Pos(),
+					Message: fmt.Sprintf("Client references undefined query parameter %q", name),
+				})
+				continue
+			}
+			got := typeof(arg)
+			want := elem(sq)
+			if !types.Identical(got, want) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     arg.Pos(),
+					Message: fmt.Sprintf("Client has wrong type for query parameter %q (got %v, should be %v)", name, got, want),
+				})
+			}
+		}
+
 		return true
 	})
 
-	for _, r := range routes {
-		if !r.seen {
+	for _, sr := range routes {
+		if !sr.seen {
 			pass.Report(analysis.Diagnostic{
 				Pos:     clientFile.Pos(),
-				Message: fmt.Sprintf("Client missing method for %v", r),
+				Message: fmt.Sprintf("Client missing method for %v", sr),
 			})
 		}
 	}
