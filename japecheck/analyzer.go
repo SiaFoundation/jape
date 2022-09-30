@@ -381,19 +381,54 @@ func (r clientRoute) normalizedRoute() string {
 }
 
 func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
+	sprintfParse := func(r *clientRoute, expr ast.Expr) {
+		r.queryParams = make(map[string]ast.Expr)
+		if call, ok := expr.(*ast.CallExpr); ok {
+			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && types.ExprString(sel) == "fmt.Sprintf" {
+				nPath := strings.Count(r.path, "/%")
+				nForm := strings.Count(r.path, "=%")
+				if len(call.Args[1:]) != nPath+nForm {
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Pos(),
+						Message: fmt.Sprintf("route contains (%v path + %v form) = %v parameters, but only %v arguments are supplied", nPath, nForm, nPath+nForm, len(call.Args[1:])),
+					})
+					return
+				}
+				var queryParams []string
+				if i := strings.Index(r.path, "?"); i != -1 {
+					for _, part := range strings.Split(r.path[i+1:], "&") {
+						if i := strings.Index(part, "=%"); i == -1 {
+							continue // hard-coded form value
+						} else {
+							queryParams = append(queryParams, part[:i])
+						}
+					}
+				}
+				for i, arg := range call.Args[1:] {
+					if i < nPath {
+						r.pathParams = append(r.pathParams, arg)
+					} else {
+						r.queryParams[queryParams[i-nPath]] = arg
+					}
+				}
+			}
+		}
+	}
+
 	if call.Fun.(*ast.SelectorExpr).Sel.Name == "Custom" {
-		return &clientRoute{
+		r := &clientRoute{
 			method:   evalConstString(call.Args[0], pass.TypesInfo),
 			path:     strings.TrimPrefix(evalConstString(call.Args[1], pass.TypesInfo), clientPrefix),
 			request:  call.Args[2],
 			response: call.Args[3],
 		}
+		sprintfParse(r, call.Args[1])
+		return r
 	}
 
 	r := &clientRoute{
-		method:      call.Fun.(*ast.SelectorExpr).Sel.Name,
-		path:        strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
-		queryParams: make(map[string]ast.Expr),
+		method: call.Fun.(*ast.SelectorExpr).Sel.Name,
+		path:   strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
 	}
 	switch r.method {
 	case "GET":
@@ -404,38 +439,7 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 	case "PUT":
 		r.request = call.Args[1]
 	}
-
-	if call, ok := call.Args[0].(*ast.CallExpr); ok {
-		if sel, ok := call.Fun.(*ast.SelectorExpr); ok && types.ExprString(sel) == "fmt.Sprintf" {
-			nPath := strings.Count(r.path, "/%")
-			nForm := strings.Count(r.path, "=%")
-			if len(call.Args[1:]) != nPath+nForm {
-				pass.Report(analysis.Diagnostic{
-					Pos:     call.Pos(),
-					Message: fmt.Sprintf("route contains (%v path + %v form) = %v parameters, but only %v arguments are supplied", nPath, nForm, nPath+nForm, len(call.Args[1:])),
-				})
-				return nil
-			}
-			var queryParams []string
-			if i := strings.Index(r.path, "?"); i != -1 {
-				for _, part := range strings.Split(r.path[i+1:], "&") {
-					if i := strings.Index(part, "=%"); i == -1 {
-						continue // hard-coded form value
-					} else {
-						queryParams = append(queryParams, part[:i])
-					}
-				}
-			}
-			for i, arg := range call.Args[1:] {
-				if i < nPath {
-					r.pathParams = append(r.pathParams, arg)
-				} else {
-					r.queryParams[queryParams[i-nPath]] = arg
-				}
-			}
-		}
-	}
-
+	sprintfParse(r, call.Args[0])
 	return r
 }
 
