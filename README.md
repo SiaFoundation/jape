@@ -47,3 +47,9 @@ example.go:24:43 Client has wrong response type for POST /hello/:name (got int, 
 
 Note that `japecheck` is defined in a separate module to avoid dragging in
 unnecessary dependencies. To install it, run `go install go.sia.tech/jape/japecheck`.
+You can then run it as a pre-commit hook like so:
+
+```bash
+echo -e "#!/usr/bin/env bash\njapecheck ./api" > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
