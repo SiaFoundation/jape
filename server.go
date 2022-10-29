@@ -11,17 +11,6 @@ import (
 	"github.com/julienschmidt/httprouter"
 )
 
-// AuthMiddleware enforces HTTP Basic Authentication on the provided handler.
-func AuthMiddleware(handler http.Handler, requiredPass string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if _, password, ok := req.BasicAuth(); !ok || password != requiredPass {
-			http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
-			return
-		}
-		handler.ServeHTTP(w, req)
-	})
-}
-
 // A Context contains the values relevant to an HTTP handler.
 type Context struct {
 	ResponseWriter http.ResponseWriter
@@ -177,4 +166,30 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 		}
 	}
 	return router
+}
+
+// Adapt turns a http.Handler transformer into a Handler transformer, allowing
+// standard middleware to be applied to individual jape endpoints.
+func Adapt(mid func(http.Handler) http.Handler) func(Handler) Handler {
+	return func(h Handler) Handler {
+		return func(c Context) {
+			mid(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				h(Context{ResponseWriter: w, Request: req, PathParams: c.PathParams})
+			})).ServeHTTP(c.ResponseWriter, c.Request)
+		}
+	}
+}
+
+// BasicAuth returns a http.Handler transformer that enforces HTTP Basic
+// Authentication.
+func BasicAuth(password string) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if _, p, ok := req.BasicAuth(); !ok || p != password {
+				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
+				return
+			}
+			h.ServeHTTP(w, req)
+		})
+	}
 }
