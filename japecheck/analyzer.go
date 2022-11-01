@@ -10,7 +10,10 @@ import (
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/passes/ctrlflow"
+	"golang.org/x/tools/go/analysis/passes/inspect"
 	"golang.org/x/tools/go/ast/astutil"
+	"golang.org/x/tools/go/cfg"
 )
 
 const Doc = `enforce jape client/server parity
@@ -24,6 +27,10 @@ var Analyzer = &analysis.Analyzer{
 	Doc:              Doc,
 	Run:              run,
 	RunDespiteErrors: true,
+	Requires: []*analysis.Analyzer{
+		inspect.Analyzer,
+		ctrlflow.Analyzer,
+	},
 }
 
 var clientPrefix string
@@ -118,7 +125,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 	}
 
 	// lookup funcBody
-	gotoDef := func(id *ast.Ident) ast.Node {
+	gotoDef := func(id *ast.Ident) (*ast.FuncDecl, ast.Node) {
 		obj := pass.TypesInfo.ObjectOf(id)
 		for _, file := range pass.Files {
 			path, _ := astutil.PathEnclosingInterval(file, obj.Pos(), obj.Pos())
@@ -127,25 +134,33 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 			}
 			for _, n := range path {
 				if f, ok := n.(*ast.FuncDecl); ok && f.Name.Name == id.Name {
-					return f.Body
+					return f, f.Body
 				}
 			}
 		}
-		return nil
+		return nil, nil
 	}
+	var fl *ast.FuncLit
+	var fd *ast.FuncDecl
 	var funcBody ast.Node
 	switch v := kv.Value.(type) {
 	case *ast.FuncLit:
-		funcBody = v.Body
+		fl, funcBody = v, v.Body
 	case *ast.Ident:
-		funcBody = gotoDef(v)
+		fd, funcBody = gotoDef(v)
 	case *ast.SelectorExpr:
-		funcBody = gotoDef(v.Sel)
+		fd, funcBody = gotoDef(v.Sel)
 	}
 	if funcBody == nil {
 		pass.Report(analysis.Diagnostic{
 			Pos:     kv.Pos(),
 			Message: "Could not locate handler definition",
+		})
+		return nil, false
+	} else if fl == nil && fd == nil {
+		pass.Report(analysis.Diagnostic{
+			Pos:     kv.Pos(),
+			Message: "Could not locate handler function declaration or literal",
 		})
 		return nil, false
 	}
@@ -349,6 +364,52 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 			Message: fmt.Sprintf("%v routes should read a request object", r.method),
 		})
 		return nil, false
+	}
+
+	checkCfg := func(cfgg *cfg.CFG) {
+		isCheckCall := func(pass *analysis.Pass, n ast.Node) bool {
+			if call, ok := n.(*ast.CallExpr); !ok {
+				return false
+			} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
+				return false
+			} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Context" {
+				return false
+			} else if sel.Sel.Name != "Check" {
+				return false
+			}
+			return true
+		}
+		checkSuccessor := func(block *cfg.Block) bool {
+			if len(block.Nodes) == 1 {
+				if _, ok := block.Nodes[0].(*ast.ReturnStmt); ok {
+					return true
+				}
+			}
+			return false
+		}
+		for _, block := range cfgg.Blocks {
+			for _, n := range block.Nodes {
+				if e, ok := n.(*ast.BinaryExpr); ok {
+					// check if jc.Check() != nil
+					if isCheckCall(pass, e.X) && e.Op == token.NEQ {
+						// check that successor is just a return statement
+						if !checkSuccessor(cfgg.Blocks[block.Succs[0].Index]) {
+							pass.Report(analysis.Diagnostic{
+								Pos:     e.Pos(),
+								Message: fmt.Sprintf("jc.Check() != nil doesn't immediately return"),
+							})
+						}
+					}
+				}
+			}
+		}
+	}
+
+	cfgs := pass.ResultOf[ctrlflow.Analyzer].(*ctrlflow.CFGs)
+	if fd != nil {
+		checkCfg(cfgs.FuncDecl(fd))
+	} else if fl != nil {
+		checkCfg(cfgs.FuncLit(fl))
 	}
 
 	return r, true
