@@ -100,6 +100,22 @@ func (r serverRoute) normalizedRoute() string {
 	return r.method + " " + strings.Join(split, "/")
 }
 
+func gotoDef(id *ast.Ident, pass *analysis.Pass) (*ast.FuncDecl, ast.Node) {
+	obj := pass.TypesInfo.ObjectOf(id)
+	for _, file := range pass.Files {
+		path, _ := astutil.PathEnclosingInterval(file, obj.Pos(), obj.Pos())
+		if len(path) == 1 {
+			continue // not the right file
+		}
+		for _, n := range path {
+			if f, ok := n.(*ast.FuncDecl); ok && f.Name.Name == id.Name {
+				return f, f.Body
+			}
+		}
+	}
+	return nil, nil
+}
+
 func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, bool) {
 	typeof := func(e ast.Expr) types.Type { return pass.TypesInfo.TypeOf(e) }
 
@@ -125,42 +141,19 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 	}
 
 	// lookup funcBody
-	gotoDef := func(id *ast.Ident) (*ast.FuncDecl, ast.Node) {
-		obj := pass.TypesInfo.ObjectOf(id)
-		for _, file := range pass.Files {
-			path, _ := astutil.PathEnclosingInterval(file, obj.Pos(), obj.Pos())
-			if len(path) == 1 {
-				continue // not the right file
-			}
-			for _, n := range path {
-				if f, ok := n.(*ast.FuncDecl); ok && f.Name.Name == id.Name {
-					return f, f.Body
-				}
-			}
-		}
-		return nil, nil
-	}
-	var fl *ast.FuncLit
-	var fd *ast.FuncDecl
 	var funcBody ast.Node
 	switch v := kv.Value.(type) {
 	case *ast.FuncLit:
-		fl, funcBody = v, v.Body
+		funcBody = v.Body
 	case *ast.Ident:
-		fd, funcBody = gotoDef(v)
+		_, funcBody = gotoDef(v, pass)
 	case *ast.SelectorExpr:
-		fd, funcBody = gotoDef(v.Sel)
+		_, funcBody = gotoDef(v.Sel, pass)
 	}
 	if funcBody == nil {
 		pass.Report(analysis.Diagnostic{
 			Pos:     kv.Pos(),
 			Message: "Could not locate handler definition",
-		})
-		return nil, false
-	} else if fl == nil && fd == nil {
-		pass.Report(analysis.Diagnostic{
-			Pos:     kv.Pos(),
-			Message: "Could not locate handler function declaration or literal",
 		})
 		return nil, false
 	}
@@ -366,53 +359,95 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 		return nil, false
 	}
 
-	checkCfg := func(cfgg *cfg.CFG) {
-		isCheckCall := func(pass *analysis.Pass, n ast.Node) bool {
-			if call, ok := n.(*ast.CallExpr); !ok {
-				return false
-			} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
-				return false
-			} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Context" {
-				return false
-			} else if sel.Sel.Name != "Check" {
-				return false
-			}
-			return true
-		}
-		checkSuccessor := func(block *cfg.Block) bool {
-			if len(block.Nodes) == 1 {
-				if _, ok := block.Nodes[0].(*ast.ReturnStmt); ok {
-					return true
-				}
-			}
+	return r, true
+}
+
+func checkNoMultipleWrites(kv *ast.KeyValueExpr, pass *analysis.Pass) bool {
+	typeof := func(e ast.Expr) types.Type { return pass.TypesInfo.TypeOf(e) }
+
+	var fl *ast.FuncLit
+	var fd *ast.FuncDecl
+	switch v := kv.Value.(type) {
+	case *ast.FuncLit:
+		fl, _ = v, v.Body
+	case *ast.Ident:
+		fd, _ = gotoDef(v, pass)
+	case *ast.SelectorExpr:
+		fd, _ = gotoDef(v.Sel, pass)
+	}
+	if fl == nil && fd == nil {
+		pass.Report(analysis.Diagnostic{
+			Pos:     kv.Pos(),
+			Message: "Could not locate handler function declaration or literal",
+		})
+		return false
+	}
+
+	isCheckCall := func(pass *analysis.Pass, n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); !ok {
+			return false
+		} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
+			return false
+		} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Context" {
+			return false
+		} else if sel.Sel.Name != "Check" && sel.Sel.Name != "Decode" && sel.Sel.Name != "DecodeParam" && sel.Sel.Name != "DecodeForm" && sel.Sel.Name != "Encode" {
 			return false
 		}
+		return true
+	}
+	var checkSuccessor func(cfgg *cfg.CFG, index int32) bool
+	checkSuccessor = func(cfgg *cfg.CFG, index int32) bool {
+		block := cfgg.Blocks[index]
+		for _, n := range block.Nodes {
+			if expr, ok := n.(*ast.ExprStmt); !ok {
+				continue
+			} else if isCheckCall(pass, expr.X) {
+				return false
+			}
+		}
+		if len(block.Succs) == 1 {
+			return checkSuccessor(cfgg, block.Succs[0].Index)
+		}
+		return true
+	}
+	checkCfg := func(cfgg *cfg.CFG) bool {
 		for _, block := range cfgg.Blocks {
 			for _, n := range block.Nodes {
 				if e, ok := n.(*ast.BinaryExpr); ok {
-					// check if jc.Check() != nil
-					if isCheckCall(pass, e.X) && e.Op == token.NEQ {
-						// check that successor is just a return statement
-						if !checkSuccessor(cfgg.Blocks[block.Succs[0].Index]) {
+					if isCheckCall(pass, e.X) {
+						if len(block.Succs) != 2 {
+							continue
+						}
+
+						var dirty int32
+						if e.Op == token.NEQ {
+							dirty = block.Succs[0].Index
+						} else {
+							dirty = block.Succs[1].Index
+						}
+
+						if !checkSuccessor(cfgg, dirty) {
 							pass.Report(analysis.Diagnostic{
 								Pos:     e.Pos(),
-								Message: fmt.Sprintf("jc.Check() != nil doesn't immediately return"),
+								Message: fmt.Sprintf("Jape context writes response or error multiple times"),
 							})
+							return false
 						}
 					}
 				}
 			}
 		}
+		return true
 	}
 
 	cfgs := pass.ResultOf[ctrlflow.Analyzer].(*ctrlflow.CFGs)
 	if fd != nil {
-		checkCfg(cfgs.FuncDecl(fd))
+		return checkCfg(cfgs.FuncDecl(fd))
 	} else if fl != nil {
-		checkCfg(cfgs.FuncLit(fl))
+		return checkCfg(cfgs.FuncLit(fl))
 	}
 
-	return r, true
+	return true
 }
 
 type clientRoute struct {
@@ -574,6 +609,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 		for _, elt := range n.(*ast.CompositeLit).Elts {
+			checkNoMultipleWrites(elt.(*ast.KeyValueExpr), pass)
 			r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
 			if !ok {
 				continue
