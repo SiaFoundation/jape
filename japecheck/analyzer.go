@@ -394,8 +394,14 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 		return found
 	}
 
+	visited := make(map[*cfg.Block]bool)
 	var checkBlock func(b *cfg.Block, prevWrite ast.Node)
 	checkBlock = func(b *cfg.Block, prevWrite ast.Node) {
+		if visited[b] {
+			return
+		}
+		visited[b] = true
+
 		for _, n := range b.Nodes {
 			if containsWrite(n) {
 				if prevWrite != nil {
@@ -410,7 +416,7 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 			}
 		}
 
-		if len(b.Succs) == 2 {
+		if len(b.Succs) == 2 && len(b.Nodes) != 0 {
 			cond := b.Nodes[len(b.Nodes)-1].(ast.Expr)
 			if !containsWrite(cond) {
 				checkBlock(b.Succs[0], prevWrite)
@@ -420,6 +426,7 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 
 			var cmp token.Token
 			var op token.Token
+			var numConds int
 			var checkCond func(ast.Expr) bool
 			checkCond = func(cond ast.Expr) bool {
 				if be, ok := cond.(*ast.BinaryExpr); ok {
@@ -430,6 +437,7 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 						} else if be.Op != cmp {
 							return false
 						}
+						numConds++
 						return isWrite(be.X) && typeof(be.Y) == types.Typ[types.UntypedNil]
 					case token.LAND, token.LOR:
 						if op == 0 {
@@ -450,7 +458,7 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 				return
 			}
 
-			if (cmp == token.EQL && op != token.LAND) || (cmp == token.NEQ && op != token.LOR) {
+			if numConds > 1 && ((cmp == token.EQL && op != token.LAND) || (cmp == token.NEQ && op != token.LOR)) {
 				pass.Report(analysis.Diagnostic{
 					Pos:     cond.Pos(),
 					Message: "Condition may write multiple responses",
