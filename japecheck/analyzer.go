@@ -474,25 +474,19 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 
 	cfgs := pass.ResultOf[ctrlflow.Analyzer].(*ctrlflow.CFGs)
 	var g *cfg.CFG
-	var funcBody ast.Node
 	switch v := kv.Value.(type) {
 	case *ast.FuncLit:
 		g = cfgs.FuncLit(v)
-		funcBody = v.Body
 	case *ast.Ident:
-		var fd *ast.FuncDecl
-		fd, funcBody = gotoDef(v, pass)
-		if fd != nil {
+		if fd, _ := gotoDef(v, pass); fd != nil {
 			g = cfgs.FuncDecl(fd)
 		}
 	case *ast.SelectorExpr:
-		var fd *ast.FuncDecl
-		fd, funcBody = gotoDef(v.Sel, pass)
-		if fd != nil {
+		if fd, _ := gotoDef(v.Sel, pass); fd != nil {
 			g = cfgs.FuncDecl(fd)
 		}
 	}
-	if g == nil || funcBody == nil {
+	if g == nil {
 		pass.Report(analysis.Diagnostic{
 			Pos:     kv.Pos(),
 			Message: "Could not locate handler function declaration or literal",
