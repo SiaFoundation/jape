@@ -18,7 +18,7 @@ import (
 
 func helloHandler(jc jape.Context) {
     var greeting string
-    if jc.Decode(&greeting) {
+    if jc.Decode(&greeting) == nil {
         jc.Encode(greeting + ", " + jc.PathParam("name"))
     }
 }
