@@ -173,7 +173,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 				if r.request != types.Typ[types.UntypedNil] && !isPtr(r.request) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[0].Pos(),
-						Message: "request type must be a pointer",
+						Message: "Request type must be a pointer",
 					})
 					return false
 				}
@@ -275,7 +275,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 				if prev, ok := r.queryParams[name]; ok && !types.Identical(prev, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
-						Message: fmt.Sprintf("form value %q decoded as %v, but was previously decoded as %v", name, typ, prev),
+						Message: fmt.Sprintf("Form value %q decoded as %v, but was previously decoded as %v", name, typ, prev),
 					})
 					return false
 				}
@@ -299,7 +299,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[1].Pos(),
-						Message: fmt.Sprintf("param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
+						Message: fmt.Sprintf("Param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
 					})
 					return false
 				} else if !isPtr(typ) {
@@ -329,7 +329,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
-						Message: fmt.Sprintf("param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
+						Message: fmt.Sprintf("Param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
 					})
 					return false
 				}
@@ -362,92 +362,147 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 	return r, true
 }
 
-func checkNoMultipleWrites(kv *ast.KeyValueExpr, pass *analysis.Pass) bool {
+func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 	typeof := func(e ast.Expr) types.Type { return pass.TypesInfo.TypeOf(e) }
 
-	var fl *ast.FuncLit
-	var fd *ast.FuncDecl
-	switch v := kv.Value.(type) {
-	case *ast.FuncLit:
-		fl, _ = v, v.Body
-	case *ast.Ident:
-		fd, _ = gotoDef(v, pass)
-	case *ast.SelectorExpr:
-		fd, _ = gotoDef(v.Sel, pass)
-	}
-	if fl == nil && fd == nil {
-		pass.Report(analysis.Diagnostic{
-			Pos:     kv.Pos(),
-			Message: "Could not locate handler function declaration or literal",
-		})
-		return false
-	}
-
-	isCheckCall := func(pass *analysis.Pass, n ast.Node) bool {
+	isWrite := func(n ast.Node) bool {
 		if call, ok := n.(*ast.CallExpr); !ok {
 			return false
 		} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
 			return false
 		} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Context" {
 			return false
-		} else if sel.Sel.Name != "Check" && sel.Sel.Name != "Decode" && sel.Sel.Name != "DecodeParam" && sel.Sel.Name != "DecodeForm" && sel.Sel.Name != "Encode" {
-			return false
+		} else {
+			m := sel.Sel.Name
+			return m == "Error" ||
+				m == "Check" ||
+				m == "Decode" ||
+				m == "DecodeParam" ||
+				m == "DecodeForm" ||
+				m == "Encode"
 		}
-		return true
 	}
-	var checkSuccessor func(cfgg *cfg.CFG, index int32) bool
-	checkSuccessor = func(cfgg *cfg.CFG, index int32) bool {
-		block := cfgg.Blocks[index]
-		for _, n := range block.Nodes {
-			if expr, ok := n.(*ast.ExprStmt); !ok {
-				continue
-			} else if isCheckCall(pass, expr.X) {
+	containsWrite := func(n ast.Node) bool {
+		var found bool
+		ast.Inspect(n, func(n ast.Node) bool {
+			if isWrite(n) {
+				found = true
 				return false
 			}
-		}
-		if len(block.Succs) == 1 {
-			return checkSuccessor(cfgg, block.Succs[0].Index)
-		}
-		return true
+			return true
+		})
+		return found
 	}
-	checkCfg := func(cfgg *cfg.CFG) bool {
-		for _, block := range cfgg.Blocks {
-			for _, n := range block.Nodes {
-				if e, ok := n.(*ast.BinaryExpr); ok {
-					if isCheckCall(pass, e.X) {
-						if len(block.Succs) != 2 {
-							continue
-						}
 
-						var dirty int32
-						if e.Op == token.NEQ {
-							dirty = block.Succs[0].Index
-						} else {
-							dirty = block.Succs[1].Index
-						}
-
-						if !checkSuccessor(cfgg, dirty) {
-							pass.Report(analysis.Diagnostic{
-								Pos:     e.Pos(),
-								Message: fmt.Sprintf("Jape context writes response or error multiple times"),
-							})
-							return false
-						}
-					}
+	var checkBlock func(b *cfg.Block, prevWrite ast.Node)
+	checkBlock = func(b *cfg.Block, prevWrite ast.Node) {
+		for _, n := range b.Nodes {
+			if containsWrite(n) {
+				if prevWrite != nil {
+					pass.Report(analysis.Diagnostic{
+						Pos:     n.Pos(),
+						Message: fmt.Sprintf("Handler writes multiple responses (previous write at %v)", pass.Fset.Position(prevWrite.Pos())),
+					})
+					return
+				} else {
+					prevWrite = n
 				}
 			}
 		}
-		return true
+
+		if len(b.Succs) == 2 {
+			cond := b.Nodes[len(b.Nodes)-1].(ast.Expr)
+			if !containsWrite(cond) {
+				checkBlock(b.Succs[0], prevWrite)
+				checkBlock(b.Succs[1], prevWrite)
+				return
+			}
+
+			var cmp token.Token
+			var op token.Token
+			var checkCond func(ast.Expr) bool
+			checkCond = func(cond ast.Expr) bool {
+				if be, ok := cond.(*ast.BinaryExpr); ok {
+					switch be.Op {
+					case token.EQL, token.NEQ:
+						if cmp == 0 {
+							cmp = be.Op
+						} else if be.Op != cmp {
+							return false
+						}
+						return isWrite(be.X) && typeof(be.Y) == types.Typ[types.UntypedNil]
+					case token.LAND, token.LOR:
+						if op == 0 {
+							op = be.Op
+						} else if be.Op != op {
+							return false
+						}
+						return checkCond(be.X) && checkCond(be.Y)
+					}
+				}
+				return false
+			}
+			if !checkCond(cond) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     cond.Pos(),
+					Message: "Weird condition expression; please stick to either (x != nil || y != nil || ...) or (x == nil && y == nil && ...)",
+				})
+				return
+			}
+
+			if (cmp == token.EQL && op != token.LAND) || (cmp == token.NEQ && op != token.LOR) {
+				pass.Report(analysis.Diagnostic{
+					Pos:     cond.Pos(),
+					Message: "Condition may write multiple responses",
+				})
+				return
+			}
+
+			if cmp == token.NEQ {
+				checkBlock(b.Succs[0], prevWrite)
+				checkBlock(b.Succs[1], nil)
+			} else {
+				checkBlock(b.Succs[0], nil)
+				checkBlock(b.Succs[1], prevWrite)
+			}
+		} else {
+			for _, s := range b.Succs {
+				checkBlock(s, prevWrite)
+			}
+		}
 	}
 
 	cfgs := pass.ResultOf[ctrlflow.Analyzer].(*ctrlflow.CFGs)
-	if fd != nil {
-		return checkCfg(cfgs.FuncDecl(fd))
-	} else if fl != nil {
-		return checkCfg(cfgs.FuncLit(fl))
+	var g *cfg.CFG
+	var funcBody ast.Node
+	switch v := kv.Value.(type) {
+	case *ast.FuncLit:
+		g = cfgs.FuncLit(v)
+		funcBody = v.Body
+	case *ast.Ident:
+		var fd *ast.FuncDecl
+		fd, funcBody = gotoDef(v, pass)
+		if fd != nil {
+			g = cfgs.FuncDecl(fd)
+		}
+	case *ast.SelectorExpr:
+		var fd *ast.FuncDecl
+		fd, funcBody = gotoDef(v.Sel, pass)
+		if fd != nil {
+			g = cfgs.FuncDecl(fd)
+		}
+	}
+	if g == nil || funcBody == nil {
+		pass.Report(analysis.Diagnostic{
+			Pos:     kv.Pos(),
+			Message: "Could not locate handler function declaration or literal",
+		})
+		return
 	}
 
-	return true
+	for _, b := range g.Blocks {
+		checkBlock(b, nil)
+	}
 }
 
 type clientRoute struct {
@@ -609,12 +664,14 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		}
 		for _, elt := range n.(*ast.CompositeLit).Elts {
-			checkNoMultipleWrites(elt.(*ast.KeyValueExpr), pass)
 			r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
 			if !ok {
 				continue
 			}
 			routes[r.normalizedRoute()] = r
+
+			// check that the handler only writes to the response body once
+			checkSingleResponse(elt.(*ast.KeyValueExpr), pass)
 		}
 		done = true
 		return false
