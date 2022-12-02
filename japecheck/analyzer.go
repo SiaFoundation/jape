@@ -543,7 +543,7 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 				if len(call.Args[1:]) != nPath+nForm {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
-						Message: fmt.Sprintf("route contains (%v path + %v form) = %v parameters, but only %v arguments are supplied", nPath, nForm, nPath+nForm, len(call.Args[1:])),
+						Message: fmt.Sprintf("route contains (%v path + %v form) = %v parameters, but %v arguments are supplied", nPath, nForm, nPath+nForm, len(call.Args[1:])),
 					})
 					return
 				}
