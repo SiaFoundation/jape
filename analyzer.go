@@ -1,4 +1,4 @@
-package main
+package jape
 
 import (
 	"errors"
