@@ -2,6 +2,7 @@ package jape
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 type Client struct {
 	BaseURL  string
 	Password string
+
+	ctx context.Context
 }
 
 func (c *Client) req(method string, route string, data, resp interface{}) error {
@@ -22,7 +25,11 @@ func (c *Client) req(method string, route string, data, resp interface{}) error 
 		js, _ := json.Marshal(data)
 		body = bytes.NewReader(js)
 	}
-	req, err := http.NewRequest(method, fmt.Sprintf("%v%v", c.BaseURL, route), body)
+	ctx := context.Background()
+	if c.ctx != nil {
+		ctx = c.ctx
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("%v%v", c.BaseURL, route), body)
 	if err != nil {
 		panic(err)
 	}
@@ -63,3 +70,14 @@ func (c *Client) DELETE(route string) error { return c.req("DELETE", route, nil,
 // a client method. This allows japecheck to be used on endpoints that do not
 // speak JSON.
 func (c *Client) Custom(method, route string, d, r interface{}) {}
+
+// WithContext returns a copy of the client with the provided context attached
+// to it. The context will be used when creating http requests with
+// http.NewRequestWithContext.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	return &Client{
+		BaseURL:  c.BaseURL,
+		Password: c.Password,
+		ctx:      ctx,
+	}
+}
