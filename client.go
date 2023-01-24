@@ -71,9 +71,8 @@ func (c *Client) DELETE(route string) error { return c.req("DELETE", route, nil,
 // speak JSON.
 func (c *Client) Custom(method, route string, d, r interface{}) {}
 
-// WithContext returns a copy of the client with the provided context attached
-// to it. The context will be used when creating http requests with
-// http.NewRequestWithContext.
+// WithContext returns a copy of the client that uses the provided context for
+// all requests.
 func (c *Client) WithContext(ctx context.Context) *Client {
 	return &Client{
 		BaseURL:  c.BaseURL,
