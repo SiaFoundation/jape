@@ -686,7 +686,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return true
 		} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
 			return true
-		} else if typ := typeof(sel.X); typ == nil || typ.String() != "go.sia.tech/jape.Client" {
+		} else if typ := typeof(sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
 			return true
 		} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
 			return true
