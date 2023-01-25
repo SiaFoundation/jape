@@ -6,6 +6,7 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
+	"go/constant"
 	"strconv"
 	"strings"
 
@@ -65,6 +66,9 @@ func evalConstString(expr ast.Expr, info *types.Info) string {
 		}
 		return "%s"
 	case *ast.Ident:
+		if typ, ok := info.Types[v]; ok {
+			return constant.StringVal(typ.Value)
+		}
 		return "%s"
 	default:
 		panic(fmt.Sprintf("unhandled expr type (%T)", expr))
