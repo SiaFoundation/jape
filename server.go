@@ -68,8 +68,8 @@ func (c Context) PathParam(param string) string {
 // DecodeParam decodes the specified path parameter into v, which must implement
 // one of the following methods:
 //
-//   UnmarshalText([]byte) error
-//   LoadString(string) error
+//	UnmarshalText([]byte) error
+//	LoadString(string) error
 //
 // If decoding fails, DecodeParam writes an error to the response body and
 // returns it.
@@ -92,13 +92,13 @@ func (c Context) DecodeParam(param string, v interface{}) error {
 // DecodeForm decodes the form value with the specified key into v, which must
 // implement one of the following methods:
 //
-//   UnmarshalText([]byte) error
-//   LoadString(string) error
+//	UnmarshalText([]byte) error
+//	LoadString(string) error
 //
 // The following basic types are also supported:
 //
-//   *int
-//   *bool
+//	*int
+//	*bool
 //
 // If decoding fails, DecodeForm writes an error to the response body and
 // returns it. If the form value is empty, no error is returned and v is

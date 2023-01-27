@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
-	"go/constant"
 	"strconv"
 	"strings"
 
@@ -66,7 +66,7 @@ func evalConstString(expr ast.Expr, info *types.Info) string {
 		}
 		return "%s"
 	case *ast.Ident:
-		if typ, ok := info.Types[v]; ok {
+		if typ, ok := info.Types[v]; ok && typ.Value != nil {
 			return constant.StringVal(typ.Value)
 		}
 		return "%s"
