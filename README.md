@@ -52,3 +52,29 @@ You can then run it as a pre-commit hook like so:
 echo -e "#!/usr/bin/env bash\njapecheck ./api" > .git/hooks/pre-commit
 chmod +x .git/hooks/pre-commit
 ```
+
+## Use with Github Actions
+
+To use with [action-golang-analysis](https://github.com/SiaFoundation/action-golang-analysis), create `.github/workflows/analyzer.yml` in your repository with the following contents:
+
+```
+name: Analyzer
+on:
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+
+jobs:
+  analyzer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-go@v3
+      - uses: SiaFoundation/action-golang-analysis@HEAD
+        with:
+          analyzers: |
+            go.sia.tech/jape.Analyzer
+```
+
+It can also be added as a job within your existing workflow, like in [renterd](https://github.com/SiaFoundation/renterd/blob/master/.github/workflows/test.yml#L50).
