@@ -668,6 +668,8 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return false
 		} else if typ := typeof(n); typ == nil || typ.String() != "map[string]go.sia.tech/jape.Handler" {
 			return true
+		} else if _, ok := n.(*ast.CompositeLit); !ok {
+			return true
 		}
 		for _, elt := range n.(*ast.CompositeLit).Elts {
 			r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
