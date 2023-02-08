@@ -1,6 +1,7 @@
 package jape
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -172,10 +173,11 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 // standard middleware to be applied to individual jape endpoints.
 func Adapt(mid func(http.Handler) http.Handler) func(Handler) Handler {
 	return func(h Handler) Handler {
+		srv := mid(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			h(Context{ResponseWriter: w, Request: req, PathParams: httprouter.ParamsFromContext(req.Context())})
+		}))
 		return func(c Context) {
-			mid(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				h(Context{ResponseWriter: w, Request: req, PathParams: c.PathParams})
-			})).ServeHTTP(c.ResponseWriter, c.Request)
+			srv.ServeHTTP(c.ResponseWriter, c.Request.WithContext(context.WithValue(c.Request.Context(), httprouter.ParamsKey, c.PathParams)))
 		}
 	}
 }
