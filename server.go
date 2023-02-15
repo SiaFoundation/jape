@@ -72,6 +72,12 @@ func (c Context) PathParam(param string) string {
 //	UnmarshalText([]byte) error
 //	LoadString(string) error
 //
+// The following basic types are also supported:
+//
+//	*int
+//	*bool
+//	*string
+//
 // If decoding fails, DecodeParam writes an error to the response body and
 // returns it.
 func (c Context) DecodeParam(param string, v interface{}) error {
@@ -81,6 +87,12 @@ func (c Context) DecodeParam(param string, v interface{}) error {
 		err = v.UnmarshalText([]byte(c.PathParam(param)))
 	case interface{ LoadString(string) error }:
 		err = v.LoadString(c.PathParam(param))
+	case *string:
+		*v = c.PathParam(param)
+	case *int:
+		*v, err = strconv.Atoi(c.PathParam(param))
+	case *bool:
+		*v, err = strconv.ParseBool(c.PathParam(param))
 	default:
 		panic("unsupported type")
 	}
@@ -100,6 +112,7 @@ func (c Context) DecodeParam(param string, v interface{}) error {
 //
 //	*int
 //	*bool
+//	*string
 //
 // If decoding fails, DecodeForm writes an error to the response body and
 // returns it. If the form value is empty, no error is returned and v is
@@ -115,6 +128,8 @@ func (c Context) DecodeForm(key string, v interface{}) error {
 		err = v.UnmarshalText([]byte(value))
 	case interface{ LoadString(string) error }:
 		err = v.LoadString(value)
+	case *string:
+		*v = value
 	case *int:
 		*v, err = strconv.Atoi(value)
 	case *bool:
