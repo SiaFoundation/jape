@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 )
 
@@ -41,10 +40,10 @@ func (c *Client) req(method string, route string, data, resp interface{}) error 
 	if err != nil {
 		return err
 	}
-	defer io.Copy(ioutil.Discard, r.Body)
+	defer io.Copy(io.Discard, r.Body)
 	defer r.Body.Close()
 	if !(200 <= r.StatusCode && r.StatusCode < 300) {
-		err, _ := ioutil.ReadAll(r.Body)
+		err, _ := io.ReadAll(r.Body)
 		return errors.New(string(err))
 	}
 	if resp == nil {
