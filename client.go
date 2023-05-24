@@ -53,17 +53,21 @@ func (c *Client) req(method string, route string, data, resp interface{}) error 
 }
 
 // GET performs a GET request, decoding the response into r.
-func (c *Client) GET(route string, r interface{}) error { return c.req("GET", route, nil, r) }
+func (c *Client) GET(route string, r interface{}) error { return c.req(http.MethodGet, route, nil, r) }
 
 // POST performs a POST request. If d is non-nil, it is encoded as the request
 // body. If r is non-nil, the response is decoded into it.
-func (c *Client) POST(route string, d, r interface{}) error { return c.req("POST", route, d, r) }
+func (c *Client) POST(route string, d, r interface{}) error { return c.req(http.MethodPost, route, d, r) }
 
 // PUT performs a PUT request, encoding d as the request body.
-func (c *Client) PUT(route string, d interface{}) error { return c.req("PUT", route, d, nil) }
+func (c *Client) PUT(route string, d interface{}) error { return c.req(http.MethodPut, route, d, nil) }
 
 // DELETE performs a DELETE request.
-func (c *Client) DELETE(route string) error { return c.req("DELETE", route, nil, nil) }
+func (c *Client) DELETE(route string) error { return c.req(http.MethodDelete, route, nil, nil) }
+
+// PATCH performs a PATCH request. If d is non-nil, it is encoded as the request
+// body. If r is non-nil, the response is decoded into it.
+func (c *Client) PATCH(route string, d, r interface{}) error { return c.req(http.MethodPatch, route, d, r) }
 
 // Custom is a no-op that simply declares the request and response types used by
 // a client method. This allows japecheck to be used on endpoints that do not
