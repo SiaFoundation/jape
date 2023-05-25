@@ -169,14 +169,16 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 		}
 		method, path := fs[0], fs[1]
 		switch method {
-		case "GET":
+		case http.MethodGet:
 			router.GET(path, adaptor(h))
-		case "POST":
+		case http.MethodPost:
 			router.POST(path, adaptor(h))
-		case "PUT":
+		case http.MethodPut:
 			router.PUT(path, adaptor(h))
-		case "DELETE":
+		case http.MethodDelete:
 			router.DELETE(path, adaptor(h))
+		case http.MethodPatch:
+			router.PATCH(path, adaptor(h))
 		default:
 			panic(fmt.Sprintf("unhandled method %q", method))
 		}
