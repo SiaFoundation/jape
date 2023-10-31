@@ -1,7 +1,6 @@
 package jape
 
 import (
-	"errors"
 	"fmt"
 	"go/ast"
 	"go/constant"
@@ -9,6 +8,7 @@ import (
 	"go/types"
 	"strconv"
 	"strings"
+	"sync"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/ctrlflow"
@@ -520,6 +520,9 @@ type clientRoute struct {
 	method string
 	path   string
 
+	pos     token.Pos
+	callPos token.Pos
+
 	pathParams  []ast.Expr
 	queryParams map[string]ast.Expr
 	request     ast.Expr
@@ -544,6 +547,7 @@ func (r clientRoute) normalizedRoute() string {
 
 func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 	sprintfParse := func(r *clientRoute, expr ast.Expr) {
+		r.callPos = call.Pos()
 		r.queryParams = make(map[string]ast.Expr)
 		if call, ok := expr.(*ast.CallExpr); ok {
 			if sel, ok := call.Fun.(*ast.SelectorExpr); ok && types.ExprString(sel) == "fmt.Sprintf" {
@@ -641,9 +645,18 @@ func definesServer(file *ast.File, pass *analysis.Pass) bool {
 	return found
 }
 
+var mu sync.Mutex
+var finished bool
+var routes = make(map[string]*serverRoute)
+var clientRoutes []*clientRoute
+
 func run(pass *analysis.Pass) (interface{}, error) {
-	// find client and server definitions
+	// run is called concurrently with multiple packages and we have global state
+	mu.Lock()
+	defer mu.Unlock()
+
 	var clientFiles, serverFiles []*ast.File
+	// find client and server definitions
 	for _, file := range pass.Files {
 		if definesClient(file, pass) {
 			clientFiles = append(clientFiles, file)
@@ -652,11 +665,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			serverFiles = append(serverFiles, file)
 		}
 	}
-	if len(serverFiles) == 0 {
-		return nil, nil // irrelevant package
-	} else if len(clientFiles) == 0 {
-		return nil, errors.New("no Client definition found")
-	}
+
 	typeof := func(n ast.Node) types.Type {
 		e, ok := n.(ast.Expr)
 		if !ok {
@@ -666,7 +675,6 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	}
 
 	// parse server routes
-	routes := make(map[string]*serverRoute)
 	done := false
 	for _, serverFile := range serverFiles {
 		ast.Inspect(serverFile, func(n ast.Node) bool {
@@ -709,22 +717,30 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if cr == nil {
 				return true
 			}
+			cr.pos = n.Pos()
+			clientRoutes = append(clientRoutes, cr)
+			return true
+		})
+	}
 
-			// compare against server
+	if !finished && len(routes) > 0 && len(clientRoutes) > 0 {
+		finished = true
+		// compare against server
+		for _, cr := range clientRoutes {
 			sr, ok := routes[cr.normalizedRoute()]
 			if !ok {
 				pass.Report(analysis.Diagnostic{
-					Pos:     n.Pos(),
+					Pos:     cr.pos,
 					Message: fmt.Sprintf("Client references route not defined by server: %v", cr),
 				})
-				return true
+				continue
 			} else if sr.seen {
 				// TODO: maybe allow this?
 				pass.Report(analysis.Diagnostic{
-					Pos:     n.Pos(),
+					Pos:     cr.pos,
 					Message: fmt.Sprintf("Client references %v multiple times", cr),
 				})
-				return true
+				continue
 			}
 			sr.seen = true
 
@@ -765,7 +781,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				if i >= len(cr.pathParams) {
 					// TODO: this should be unreachable (routes[] lookup should fail)
 					pass.Report(analysis.Diagnostic{
-						Pos:     call.Pos(),
+						Pos:     cr.callPos,
 						Message: fmt.Sprintf("Client has too few path parameters for %v", sr),
 					})
 					continue
@@ -799,17 +815,16 @@ func run(pass *analysis.Pass) (interface{}, error) {
 					})
 				}
 			}
-
-			return true
-		})
-	}
-
-	for _, sr := range routes {
-		if !sr.seen {
-			pass.Report(analysis.Diagnostic{
-				Message: fmt.Sprintf("Client missing method for %v", sr),
-			})
 		}
+
+		for _, sr := range routes {
+			if !sr.seen {
+				pass.Report(analysis.Diagnostic{
+					Message: fmt.Sprintf("Client missing method for %v", sr),
+				})
+			}
+		}
+
 	}
 
 	return nil, nil
