@@ -643,18 +643,18 @@ func definesServer(file *ast.File, pass *analysis.Pass) bool {
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	// find client and server definitions
-	var clientFile, serverFile *ast.File
+	var clientFiles, serverFiles []*ast.File
 	for _, file := range pass.Files {
 		if definesClient(file, pass) {
-			clientFile = file
+			clientFiles = append(clientFiles, file)
 		}
 		if definesServer(file, pass) {
-			serverFile = file
+			serverFiles = append(serverFiles, file)
 		}
 	}
-	if serverFile == nil {
+	if len(serverFiles) == 0 {
 		return nil, nil // irrelevant package
-	} else if clientFile == nil {
+	} else if len(clientFiles) == 0 {
 		return nil, errors.New("no Client definition found")
 	}
 	typeof := func(n ast.Node) types.Type {
@@ -668,142 +668,145 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	// parse server routes
 	routes := make(map[string]*serverRoute)
 	done := false
-	ast.Inspect(serverFile, func(n ast.Node) bool {
-		if done {
-			return false
-		} else if typ := typeof(n); typ == nil || typ.String() != "map[string]go.sia.tech/jape.Handler" {
-			return true
-		} else if _, ok := n.(*ast.CompositeLit); !ok {
-			return true
-		}
-		for _, elt := range n.(*ast.CompositeLit).Elts {
-			r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
-			if !ok {
-				continue
+	for _, serverFile := range serverFiles {
+		ast.Inspect(serverFile, func(n ast.Node) bool {
+			if done {
+				return false
+			} else if typ := typeof(n); typ == nil || typ.String() != "map[string]go.sia.tech/jape.Handler" {
+				return true
+			} else if _, ok := n.(*ast.CompositeLit); !ok {
+				return true
 			}
-			routes[r.normalizedRoute()] = r
+			for _, elt := range n.(*ast.CompositeLit).Elts {
+				r, ok := parseServerRoute(elt.(*ast.KeyValueExpr), pass)
+				if !ok {
+					continue
+				}
+				routes[r.normalizedRoute()] = r
 
-			// check that the handler only writes to the response body once
-			checkSingleResponse(elt.(*ast.KeyValueExpr), pass)
-		}
-		done = true
-		return false
-	})
+				// check that the handler only writes to the response body once
+				checkSingleResponse(elt.(*ast.KeyValueExpr), pass)
+			}
+			done = true
+			return false
+		})
+	}
 
 	// compare to client routes
-	ast.Inspect(clientFile, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
-			return true
-		} else if typ := typeof(sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
-			return true
-		} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
-			return true
-		}
-		cr := parseClientRoute(call, pass)
-		if cr == nil {
-			return true
-		}
+	for _, clientFile := range clientFiles {
+		ast.Inspect(clientFile, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
+				return true
+			} else if typ := typeof(sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
+				return true
+			} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
+				return true
+			}
+			cr := parseClientRoute(call, pass)
+			if cr == nil {
+				return true
+			}
 
-		// compare against server
-		sr, ok := routes[cr.normalizedRoute()]
-		if !ok {
-			pass.Report(analysis.Diagnostic{
-				Pos:     n.Pos(),
-				Message: fmt.Sprintf("Client references route not defined by server: %v", cr),
-			})
-			return true
-		} else if sr.seen {
-			// TODO: maybe allow this?
-			pass.Report(analysis.Diagnostic{
-				Pos:     n.Pos(),
-				Message: fmt.Sprintf("Client references %v multiple times", cr),
-			})
-			return true
-		}
-		sr.seen = true
-
-		ptrTo := func(t types.Type) types.Type {
-			if t == types.Typ[types.UntypedNil] {
-				return t
-			}
-			return types.NewPointer(t)
-		}
-		elem := func(t types.Type) types.Type {
-			if t, ok := t.(*types.Pointer); ok {
-				return t.Elem()
-			}
-			return t
-		}
-
-		if cr.request != nil {
-			got := typeof(cr.request)
-			want := elem(sr.request)
-			if !types.Identical(got, want) {
-				pass.Report(analysis.Diagnostic{
-					Pos:     cr.request.Pos(),
-					Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, got, want),
-				})
-			}
-		}
-		if cr.response != nil {
-			got := typeof(cr.response)
-			want := ptrTo(sr.response)
-			if !types.Identical(got, want) {
-				pass.Report(analysis.Diagnostic{
-					Pos:     cr.response.Pos(),
-					Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, got, want),
-				})
-			}
-		}
-		for i := range sr.pathParams {
-			if i >= len(cr.pathParams) {
-				// TODO: this should be unreachable (routes[] lookup should fail)
-				pass.Report(analysis.Diagnostic{
-					Pos:     call.Pos(),
-					Message: fmt.Sprintf("Client has too few path parameters for %v", sr),
-				})
-				continue
-			}
-			cp := cr.pathParams[i]
-			sp := sr.pathParams[i]
-			got := typeof(cp)
-			want := elem(sp.typ)
-			if !types.Identical(got, want) {
-				pass.Report(analysis.Diagnostic{
-					Pos:     cp.Pos(),
-					Message: fmt.Sprintf("Client has wrong type for path parameter %q (got %v, should be %v)", sp.name, got, want),
-				})
-			}
-		}
-		for name, arg := range cr.queryParams {
-			sq, ok := sr.queryParams[name]
+			// compare against server
+			sr, ok := routes[cr.normalizedRoute()]
 			if !ok {
 				pass.Report(analysis.Diagnostic{
-					Pos:     arg.Pos(),
-					Message: fmt.Sprintf("Client references undefined query parameter %q", name),
+					Pos:     n.Pos(),
+					Message: fmt.Sprintf("Client references route not defined by server: %v", cr),
 				})
-				continue
-			}
-			got := typeof(arg)
-			want := elem(sq)
-			if !types.Identical(got, want) {
+				return true
+			} else if sr.seen {
+				// TODO: maybe allow this?
 				pass.Report(analysis.Diagnostic{
-					Pos:     arg.Pos(),
-					Message: fmt.Sprintf("Client has wrong type for query parameter %q (got %v, should be %v)", name, got, want),
+					Pos:     n.Pos(),
+					Message: fmt.Sprintf("Client references %v multiple times", cr),
 				})
+				return true
 			}
-		}
+			sr.seen = true
 
-		return true
-	})
+			ptrTo := func(t types.Type) types.Type {
+				if t == types.Typ[types.UntypedNil] {
+					return t
+				}
+				return types.NewPointer(t)
+			}
+			elem := func(t types.Type) types.Type {
+				if t, ok := t.(*types.Pointer); ok {
+					return t.Elem()
+				}
+				return t
+			}
+
+			if cr.request != nil {
+				got := typeof(cr.request)
+				want := elem(sr.request)
+				if !types.Identical(got, want) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     cr.request.Pos(),
+						Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, got, want),
+					})
+				}
+			}
+			if cr.response != nil {
+				got := typeof(cr.response)
+				want := ptrTo(sr.response)
+				if !types.Identical(got, want) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     cr.response.Pos(),
+						Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, got, want),
+					})
+				}
+			}
+			for i := range sr.pathParams {
+				if i >= len(cr.pathParams) {
+					// TODO: this should be unreachable (routes[] lookup should fail)
+					pass.Report(analysis.Diagnostic{
+						Pos:     call.Pos(),
+						Message: fmt.Sprintf("Client has too few path parameters for %v", sr),
+					})
+					continue
+				}
+				cp := cr.pathParams[i]
+				sp := sr.pathParams[i]
+				got := typeof(cp)
+				want := elem(sp.typ)
+				if !types.Identical(got, want) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     cp.Pos(),
+						Message: fmt.Sprintf("Client has wrong type for path parameter %q (got %v, should be %v)", sp.name, got, want),
+					})
+				}
+			}
+			for name, arg := range cr.queryParams {
+				sq, ok := sr.queryParams[name]
+				if !ok {
+					pass.Report(analysis.Diagnostic{
+						Pos:     arg.Pos(),
+						Message: fmt.Sprintf("Client references undefined query parameter %q", name),
+					})
+					continue
+				}
+				got := typeof(arg)
+				want := elem(sq)
+				if !types.Identical(got, want) {
+					pass.Report(analysis.Diagnostic{
+						Pos:     arg.Pos(),
+						Message: fmt.Sprintf("Client has wrong type for query parameter %q (got %v, should be %v)", name, got, want),
+					})
+				}
+			}
+
+			return true
+		})
+	}
 
 	for _, sr := range routes {
 		if !sr.seen {
 			pass.Report(analysis.Diagnostic{
-				Pos:     clientFile.Pos(),
 				Message: fmt.Sprintf("Client missing method for %v", sr),
 			})
 		}
