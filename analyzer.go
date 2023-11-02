@@ -826,7 +826,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		for _, sr := range routes {
 			if !sr.seen {
 				pass.Report(analysis.Diagnostic{
-					Message: fmt.Sprintf("Client missing method for %v", sr.normalizedRoute()),
+					Message: fmt.Sprintf("Client missing method for %v", sr),
 				})
 			}
 		}
