@@ -596,6 +596,7 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 		method: call.Fun.(*ast.SelectorExpr).Sel.Name,
 		path:   strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
 	}
+
 	switch r.method {
 	case "GET":
 		r.response = call.Args[1]
@@ -646,9 +647,11 @@ func definesServer(file *ast.File, pass *analysis.Pass) bool {
 }
 
 var mu sync.Mutex
-var finished bool
 var routes = make(map[string]*serverRoute)
 var clientRoutes []*clientRoute
+
+var finished bool
+var clientPass, serverPass *analysis.Pass
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	// run is called concurrently with multiple packages and we have global state
@@ -659,14 +662,16 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	// find client and server definitions
 	for _, file := range pass.Files {
 		if definesClient(file, pass) {
+			clientPass = pass
 			clientFiles = append(clientFiles, file)
 		}
 		if definesServer(file, pass) {
+			serverPass = pass
 			serverFiles = append(serverFiles, file)
 		}
 	}
 
-	typeof := func(n ast.Node) types.Type {
+	typeof := func(pass *analysis.Pass, n ast.Node) types.Type {
 		e, ok := n.(ast.Expr)
 		if !ok {
 			return nil
@@ -680,7 +685,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		ast.Inspect(serverFile, func(n ast.Node) bool {
 			if done {
 				return false
-			} else if typ := typeof(n); typ == nil || typ.String() != "map[string]go.sia.tech/jape.Handler" {
+			} else if typ := typeof(serverPass, n); typ == nil || typ.String() != "map[string]go.sia.tech/jape.Handler" {
 				return true
 			} else if _, ok := n.(*ast.CompositeLit); !ok {
 				return true
@@ -708,11 +713,12 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			} else if sel, ok := call.Fun.(*ast.SelectorExpr); !ok {
 				return true
-			} else if typ := typeof(sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
+			} else if typ := typeof(clientPass, sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
 				return true
 			} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
 				return true
 			}
+
 			cr := parseClientRoute(call, pass)
 			if cr == nil {
 				return true
@@ -758,7 +764,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 
 			if cr.request != nil {
-				got := typeof(cr.request)
+				got := typeof(clientPass, cr.request)
 				want := elem(sr.request)
 				if !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
@@ -768,7 +774,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 			}
 			if cr.response != nil {
-				got := typeof(cr.response)
+				got := typeof(clientPass, cr.response)
 				want := ptrTo(sr.response)
 				if !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
@@ -788,7 +794,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 				cp := cr.pathParams[i]
 				sp := sr.pathParams[i]
-				got := typeof(cp)
+				got := typeof(clientPass, cp)
 				want := elem(sp.typ)
 				if !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
@@ -806,7 +812,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 					})
 					continue
 				}
-				got := typeof(arg)
+				got := typeof(clientPass, arg)
 				want := elem(sq)
 				if !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
@@ -820,11 +826,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		for _, sr := range routes {
 			if !sr.seen {
 				pass.Report(analysis.Diagnostic{
-					Message: fmt.Sprintf("Client missing method for %v", sr),
+					Message: fmt.Sprintf("Client missing method for %v", sr.normalizedRoute()),
 				})
 			}
 		}
-
 	}
 
 	return nil, nil
