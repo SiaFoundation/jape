@@ -91,6 +91,10 @@ func (c Context) DecodeParam(param string, v interface{}) error {
 		*v = c.PathParam(param)
 	case *int:
 		*v, err = strconv.Atoi(c.PathParam(param))
+	case *int64:
+		*v, err = strconv.ParseInt(c.PathParam(param), 10, 64)
+	case *uint64:
+		*v, err = strconv.ParseUint(c.PathParam(param), 10, 64)
 	case *bool:
 		*v, err = strconv.ParseBool(c.PathParam(param))
 	default:
@@ -132,6 +136,10 @@ func (c Context) DecodeForm(key string, v interface{}) error {
 		*v = value
 	case *int:
 		*v, err = strconv.Atoi(value)
+	case *int64:
+		*v, err = strconv.ParseInt(c.PathParam(value), 10, 64)
+	case *uint64:
+		*v, err = strconv.ParseUint(c.PathParam(value), 10, 64)
 	case *bool:
 		*v, err = strconv.ParseBool(value)
 	default:
