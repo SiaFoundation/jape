@@ -654,10 +654,6 @@ var finished bool
 var clientPass, serverPass *analysis.Pass
 
 func run(pass *analysis.Pass) (interface{}, error) {
-	// run is called concurrently with multiple packages and we have global state
-	mu.Lock()
-	defer mu.Unlock()
-
 	var clientFiles, serverFiles []*ast.File
 	// find client and server definitions
 	for _, file := range pass.Files {
@@ -695,7 +691,9 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				if !ok {
 					continue
 				}
+				mu.Lock()
 				routes[r.normalizedRoute()] = r
+				mu.Unlock()
 
 				// check that the handler only writes to the response body once
 				checkSingleResponse(elt.(*ast.KeyValueExpr), pass)
@@ -724,11 +722,14 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			}
 			cr.pos = n.Pos()
+			mu.Lock()
 			clientRoutes = append(clientRoutes, cr)
+			mu.Unlock()
 			return true
 		})
 	}
 
+	mu.Lock()
 	if !finished && len(routes) > 0 && len(clientRoutes) > 0 {
 		finished = true
 		// compare against server
@@ -831,6 +832,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			}
 		}
 	}
+	mu.Unlock()
 
 	return nil, nil
 }
