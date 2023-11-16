@@ -658,12 +658,16 @@ func run(pass *analysis.Pass) (interface{}, error) {
 	// find client and server definitions
 	for _, file := range pass.Files {
 		if definesClient(file, pass) {
+			mu.Lock()
 			clientPass = pass
 			clientFiles = append(clientFiles, file)
+			mu.Unlock()
 		}
 		if definesServer(file, pass) {
+			mu.Lock()
 			serverPass = pass
 			serverFiles = append(serverFiles, file)
+			mu.Unlock()
 		}
 	}
 
@@ -677,6 +681,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 
 	// parse server routes
 	done := false
+	mu.Lock()
 	for _, serverFile := range serverFiles {
 		ast.Inspect(serverFile, func(n ast.Node) bool {
 			if done {
@@ -691,9 +696,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				if !ok {
 					continue
 				}
-				mu.Lock()
 				routes[r.normalizedRoute()] = r
-				mu.Unlock()
 
 				// check that the handler only writes to the response body once
 				checkSingleResponse(elt.(*ast.KeyValueExpr), pass)
@@ -702,8 +705,10 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			return false
 		})
 	}
+	mu.Unlock()
 
 	// compare to client routes
+	mu.Lock()
 	for _, clientFile := range clientFiles {
 		ast.Inspect(clientFile, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
@@ -722,12 +727,11 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			}
 			cr.pos = n.Pos()
-			mu.Lock()
 			clientRoutes = append(clientRoutes, cr)
-			mu.Unlock()
 			return true
 		})
 	}
+	mu.Unlock()
 
 	mu.Lock()
 	if !finished && len(routes) > 0 && len(clientRoutes) > 0 {
