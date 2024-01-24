@@ -215,6 +215,7 @@ func BasicAuth(password string) func(http.Handler) http.Handler {
 	return func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			if _, p, ok := req.BasicAuth(); !ok || p != password {
+				w.Header().Set("WWW-Authenticate", `Basic realm="API Access", charset="UTF-8"`)
 				http.Error(w, http.StatusText(http.StatusUnauthorized), http.StatusUnauthorized)
 				return
 			}
