@@ -189,6 +189,8 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 			router.PATCH(path, adaptor(h))
 		case http.MethodHead:
 			router.HEAD(path, adaptor(h))
+		case http.MethodOptions:
+			router.OPTIONS(path, adaptor(h))
 		default:
 			panic(fmt.Sprintf("unhandled method %q", method))
 		}
