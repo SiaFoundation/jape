@@ -35,6 +35,12 @@ func (c Context) Check(msg string, err error) error {
 	return nil
 }
 
+// EmptyResonse writes a 204 No Content response. This should be used when the
+// client should not expect a response body.
+func (c Context) EmptyResonse() {
+	c.ResponseWriter.WriteHeader(http.StatusNoContent)
+}
+
 // Encode writes the JSON encoding of v to the response body.
 func (c Context) Encode(v interface{}) {
 	c.ResponseWriter.Header().Set("Content-Type", "application/json")
