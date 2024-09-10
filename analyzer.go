@@ -34,10 +34,12 @@ var Analyzer = &analysis.Analyzer{
 	},
 }
 
+var checkTypes bool
 var clientPrefix string
 var serverPrefix string
 
 func init() {
+	Analyzer.Flags.BoolVar(&checkTypes, "types", true, "check that request/response types match in client and server")
 	Analyzer.Flags.StringVar(&clientPrefix, "cprefix", "", "client endpoint URL prefix to trim")
 	Analyzer.Flags.StringVar(&serverPrefix, "sprefix", "", "server endpoint URL prefix to trim")
 }
@@ -251,7 +253,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 					})
 					return false
 				}
-				if r.request != nil && !types.Identical(typ, r.request) {
+				if checkTypes && r.request != nil && !types.Identical(typ, r.request) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[0].Pos(),
 						Message: fmt.Sprintf("Decode called on %v, but was previously called on %v", typ, r.request),
@@ -269,7 +271,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 					return false
 				}
 				typ := typeof(call.Args[0])
-				if r.response != nil && !types.Identical(typ, r.response) {
+				if checkTypes && r.response != nil && !types.Identical(typ, r.response) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[0].Pos(),
 						Message: fmt.Sprintf("Encode called on %v, but was previously called on %v", typ, r.response),
@@ -281,7 +283,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 			case "DecodeForm":
 				name := evalConstString(call.Args[0], pass.TypesInfo)
 				typ := typeof(call.Args[1])
-				if prev, ok := r.queryParams[name]; ok && !types.Identical(prev, typ) {
+				if prev, ok := r.queryParams[name]; ok && checkTypes && !types.Identical(prev, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
 						Message: fmt.Sprintf("Form value %q decoded as %v, but was previously decoded as %v", name, typ, prev),
@@ -305,7 +307,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 						Message: fmt.Sprintf("DecodeParam called on param (%q) not present in route definition", name),
 					})
 					return false
-				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
+				} else if checkTypes && sp.typ != nil && !types.Identical(sp.typ, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Args[1].Pos(),
 						Message: fmt.Sprintf("Param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
@@ -335,7 +337,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 						Message: fmt.Sprintf("PathParam called on param (%q) not present in route definition", name),
 					})
 					return false
-				} else if sp.typ != nil && !types.Identical(sp.typ, typ) {
+				} else if checkTypes && sp.typ != nil && !types.Identical(sp.typ, typ) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     call.Pos(),
 						Message: fmt.Sprintf("Param %q decoded as %v, but was previously decoded as %v", name, typ, sp.typ),
@@ -771,7 +773,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if cr.request != nil {
 				got := typeof(clientPass, cr.request)
 				want := elem(sr.request)
-				if !types.Identical(got, want) {
+				if checkTypes && !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     cr.request.Pos(),
 						Message: fmt.Sprintf("Client has wrong request type for %v (got %v, should be %v)", sr, got, want),
@@ -781,7 +783,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 			if cr.response != nil {
 				got := typeof(clientPass, cr.response)
 				want := ptrTo(sr.response)
-				if !types.Identical(got, want) {
+				if checkTypes && !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     cr.response.Pos(),
 						Message: fmt.Sprintf("Client has wrong response type for %v (got %v, should be %v)", sr, got, want),
@@ -801,7 +803,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				sp := sr.pathParams[i]
 				got := typeof(clientPass, cp)
 				want := elem(sp.typ)
-				if !types.Identical(got, want) {
+				if checkTypes && !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     cp.Pos(),
 						Message: fmt.Sprintf("Client has wrong type for path parameter %q (got %v, should be %v)", sp.name, got, want),
@@ -819,7 +821,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				}
 				got := typeof(clientPass, arg)
 				want := elem(sq)
-				if !types.Identical(got, want) {
+				if checkTypes && !types.Identical(got, want) {
 					pass.Report(analysis.Diagnostic{
 						Pos:     arg.Pos(),
 						Message: fmt.Sprintf("Client has wrong type for query parameter %q (got %v, should be %v)", name, got, want),
