@@ -197,7 +197,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 						})
 						return false
 					}
-					if r.response == types.Typ[types.UntypedNil] {
+					if checkTypes && r.response == types.Typ[types.UntypedNil] {
 						pass.Report(analysis.Diagnostic{
 							Pos:     call.Args[0].Pos(),
 							Message: fmt.Sprintf("%v routes should write a response object", r.method),
@@ -356,7 +356,7 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 		r.response = types.Typ[types.UntypedNil]
 	}
 
-	if r.method == "GET" && r.response == types.Typ[types.UntypedNil] {
+	if checkTypes && r.method == "GET" && r.response == types.Typ[types.UntypedNil] {
 		pass.Report(analysis.Diagnostic{
 			Pos:     funcBody.Pos(),
 			Message: fmt.Sprintf("%v routes should write a response object", r.method),
