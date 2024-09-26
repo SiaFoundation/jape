@@ -205,6 +205,14 @@ func parseServerRoute(kv *ast.KeyValueExpr, pass *analysis.Pass) (*serverRoute, 
 						return false
 					}
 				case "POST":
+				case "PATCH":
+					if r.request == types.Typ[types.UntypedNil] {
+						pass.Report(analysis.Diagnostic{
+							Pos:     call.Args[0].Pos(),
+							Message: fmt.Sprintf("%v routes should read a request object", r.method),
+						})
+						return false
+					}
 				case "PUT":
 					if r.request == types.Typ[types.UntypedNil] {
 						pass.Report(analysis.Diagnostic{
@@ -607,6 +615,8 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 		r.response = call.Args[2]
 	case "PUT":
 		r.request = call.Args[1]
+	case "PATCH":
+		r.request = call.Args[1]
 	}
 	sprintfParse(r, call.Args[0])
 	return r
@@ -720,7 +730,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 				return true
 			} else if typ := typeof(clientPass, sel.X); typ == nil || (typ.String() != "go.sia.tech/jape.Client" && typ.String() != "*go.sia.tech/jape.Client") {
 				return true
-			} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "DELETE" && m != "Custom" {
+			} else if m := sel.Sel.Name; m != "GET" && m != "POST" && m != "PUT" && m != "PATCH" && m != "DELETE" && m != "Custom" {
 				return true
 			}
 
