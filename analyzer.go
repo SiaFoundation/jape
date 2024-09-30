@@ -617,6 +617,7 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 		r.request = call.Args[1]
 	case "PATCH":
 		r.request = call.Args[1]
+		r.response = call.Args[2]
 	}
 	sprintfParse(r, call.Args[0])
 	return r
