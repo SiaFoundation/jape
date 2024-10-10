@@ -35,31 +35,32 @@ func (c Context) Check(msg string, err error) error {
 	return nil
 }
 
-// EmptyResonse writes a 204 No Content response. This should be used when the
-// client should not expect a response body.
-func (c Context) EmptyResonse() {
-	c.ResponseWriter.WriteHeader(http.StatusNoContent)
-}
-
-// Encode writes the JSON encoding of v to the response body.
-func (c Context) Encode(v interface{}) {
-	c.ResponseWriter.Header().Set("Content-Type", "application/json")
-	// encode nil slices as [] and nil maps as {} (instead of null)
-	if val := reflect.ValueOf(v); val.Kind() == reflect.Slice && val.Len() == 0 {
-		c.ResponseWriter.Write([]byte("[]\n"))
-		return
-	} else if val.Kind() == reflect.Map && val.Len() == 0 {
-		c.ResponseWriter.Write([]byte("{}\n"))
-		return
+// Encode writes the encoding of v to the response body. If v implements the
+// ResponseWriter interface, it is written directly.
+// Otherwise, it is marshalled as JSON.
+func (c Context) Encode(v any) {
+	switch v := v.(type) {
+	case nil:
+		c.ResponseWriter.WriteHeader(http.StatusNoContent)
+	default:
+		c.ResponseWriter.Header().Set("Content-Type", "application/json")
+		// encode nil slices as [] and nil maps as {} (instead of null)
+		if val := reflect.ValueOf(v); val.Kind() == reflect.Slice && val.Len() == 0 {
+			c.ResponseWriter.Write([]byte("[]\n"))
+			return
+		} else if val.Kind() == reflect.Map && val.Len() == 0 {
+			c.ResponseWriter.Write([]byte("{}\n"))
+			return
+		}
+		enc := json.NewEncoder(c.ResponseWriter)
+		enc.SetIndent("", "  ")
+		enc.Encode(v)
 	}
-	enc := json.NewEncoder(c.ResponseWriter)
-	enc.SetIndent("", "\t")
-	enc.Encode(v)
 }
 
 // Decode decodes the JSON of the request body into v. If decoding fails, Decode
 // writes an error to the response body and returns it.
-func (c Context) Decode(v interface{}) error {
+func (c Context) Decode(v any) error {
 	if err := json.NewDecoder(c.Request.Body).Decode(v); err != nil {
 		return c.Error(fmt.Errorf("couldn't decode request type (%T): %w", v, err), http.StatusBadRequest)
 	}
@@ -86,7 +87,7 @@ func (c Context) PathParam(param string) string {
 //
 // If decoding fails, DecodeParam writes an error to the response body and
 // returns it.
-func (c Context) DecodeParam(param string, v interface{}) error {
+func (c Context) DecodeParam(param string, v any) error {
 	var err error
 	switch v := v.(type) {
 	case interface{ UnmarshalText([]byte) error }:
@@ -127,7 +128,7 @@ func (c Context) DecodeParam(param string, v interface{}) error {
 // If decoding fails, DecodeForm writes an error to the response body and
 // returns it. If the form value is empty, no error is returned and v is
 // unchanged.
-func (c Context) DecodeForm(key string, v interface{}) error {
+func (c Context) DecodeForm(key string, v any) error {
 	value := c.Request.FormValue(key)
 	if value == "" {
 		return nil
@@ -160,7 +161,7 @@ func (c Context) DecodeForm(key string, v interface{}) error {
 // Custom is a no-op that simply declares the request and response types used by
 // a handler. This allows japecheck to be used on endpoints that do not speak
 // JSON.
-func (c Context) Custom(req, resp interface{}) {}
+func (c Context) Custom(req, resp any) {}
 
 // A Handler handles HTTP requests.
 type Handler func(Context)

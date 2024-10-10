@@ -14,19 +14,13 @@ import (
 type Client struct {
 	BaseURL  string
 	Password string
-
-	ctx context.Context
 }
 
-func (c *Client) req(method string, route string, data, resp interface{}) error {
+func (c *Client) req(ctx context.Context, method string, route string, data, resp interface{}) error {
 	var body io.Reader
 	if data != nil {
 		js, _ := json.Marshal(data)
 		body = bytes.NewReader(js)
-	}
-	ctx := context.Background()
-	if c.ctx != nil {
-		ctx = c.ctx
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("%v%v", c.BaseURL, route), body)
 	if err != nil {
@@ -53,37 +47,33 @@ func (c *Client) req(method string, route string, data, resp interface{}) error 
 }
 
 // GET performs a GET request, decoding the response into r.
-func (c *Client) GET(route string, r interface{}) error { return c.req(http.MethodGet, route, nil, r) }
+func (c *Client) GET(ctx context.Context, route string, r interface{}) error {
+	return c.req(ctx, http.MethodGet, route, nil, r)
+}
 
 // POST performs a POST request. If d is non-nil, it is encoded as the request
 // body. If r is non-nil, the response is decoded into it.
-func (c *Client) POST(route string, d, r interface{}) error {
-	return c.req(http.MethodPost, route, d, r)
+func (c *Client) POST(ctx context.Context, route string, d, r interface{}) error {
+	return c.req(ctx, http.MethodPost, route, d, r)
 }
 
 // PUT performs a PUT request, encoding d as the request body.
-func (c *Client) PUT(route string, d interface{}) error { return c.req(http.MethodPut, route, d, nil) }
+func (c *Client) PUT(ctx context.Context, route string, d interface{}) error {
+	return c.req(ctx, http.MethodPut, route, d, nil)
+}
 
 // DELETE performs a DELETE request.
-func (c *Client) DELETE(route string) error { return c.req(http.MethodDelete, route, nil, nil) }
+func (c *Client) DELETE(ctx context.Context, route string) error {
+	return c.req(ctx, http.MethodDelete, route, nil, nil)
+}
 
 // PATCH performs a PATCH request. If d is non-nil, it is encoded as the request
 // body. If r is non-nil, the response is decoded into it.
-func (c *Client) PATCH(route string, d, r interface{}) error {
-	return c.req(http.MethodPatch, route, d, r)
+func (c *Client) PATCH(ctx context.Context, route string, d, r interface{}) error {
+	return c.req(ctx, http.MethodPatch, route, d, r)
 }
 
 // Custom is a no-op that simply declares the request and response types used by
 // a client method. This allows japecheck to be used on endpoints that do not
 // speak JSON.
 func (c *Client) Custom(method, route string, d, r interface{}) {}
-
-// WithContext returns a copy of the client that uses the provided context for
-// all requests.
-func (c *Client) WithContext(ctx context.Context) *Client {
-	return &Client{
-		BaseURL:  c.BaseURL,
-		Password: c.Password,
-		ctx:      ctx,
-	}
-}
