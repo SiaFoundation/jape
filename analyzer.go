@@ -602,9 +602,14 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 		return r
 	}
 
+	// We need call.Args[1].  Example:
+	// GET(ctx context.Context, route string, r interface{}) error
+	// call.Args[0] = context
+	// call.Args[1] = route
+	// call.Args[2] = pointer to response object
 	r := &clientRoute{
 		method: call.Fun.(*ast.SelectorExpr).Sel.Name,
-		path:   strings.TrimPrefix(evalConstString(call.Args[0], pass.TypesInfo), clientPrefix),
+		path:   strings.TrimPrefix(evalConstString(call.Args[1], pass.TypesInfo), clientPrefix),
 	}
 
 	switch r.method {
