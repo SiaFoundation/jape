@@ -76,4 +76,4 @@ func (c *Client) PATCH(ctx context.Context, route string, d, r interface{}) erro
 // Custom is a no-op that simply declares the request and response types used by
 // a client method. This allows japecheck to be used on endpoints that do not
 // speak JSON.
-func (c *Client) Custom(method, route string, d, r interface{}) {}
+func (c *Client) Custom(_, _ string, _, _ any) {}
