@@ -17,12 +17,16 @@ import (
 	"golang.org/x/tools/go/cfg"
 )
 
+// Doc is the documentation for the japecheck analysis.
 const Doc = `enforce jape client/server parity
 
 The japecheck analysis reports mismatches between the API endpoints
 defined by a server and the methods defined by a client.
 `
 
+// Analyzer is the main entry point for the japecheck analysis.
+// It checks that the request and response types match between client and server
+// and that the client methods match the server routes.
 var Analyzer = &analysis.Analyzer{
 	Name:             "japecheck",
 	Doc:              Doc,
@@ -573,11 +577,11 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 				var queryParams []string
 				if i := strings.Index(r.path, "?"); i != -1 {
 					for _, part := range strings.Split(r.path[i+1:], "&") {
-						if i := strings.Index(part, "=%"); i == -1 {
+						j := strings.Index(part, "=%")
+						if j == -1 {
 							continue // hard-coded form value
-						} else {
-							queryParams = append(queryParams, part[:i])
 						}
+						queryParams = append(queryParams, part[:j])
 					}
 				}
 				for i, arg := range call.Args[1:] {
