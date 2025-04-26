@@ -618,17 +618,17 @@ func parseClientRoute(call *ast.CallExpr, pass *analysis.Pass) *clientRoute {
 
 	switch r.method {
 	case "GET":
-		r.response = call.Args[1]
+		r.response = call.Args[2]
 	case "POST":
-		r.request = call.Args[1]
-		r.response = call.Args[2]
+		r.request = call.Args[2]
+		r.response = call.Args[3]
 	case "PUT":
-		r.request = call.Args[1]
+		r.request = call.Args[2]
 	case "PATCH":
-		r.request = call.Args[1]
-		r.response = call.Args[2]
+		r.request = call.Args[2]
+		r.response = call.Args[3]
 	}
-	sprintfParse(r, call.Args[0])
+	sprintfParse(r, call.Args[1])
 	return r
 }
 
