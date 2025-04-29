@@ -3,8 +3,8 @@ package jape
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"reflect"
 	"strconv"
@@ -62,7 +62,12 @@ func (c Context) Encode(v any) {
 // DecodeLimit decodes the JSON of the request body into v. If v is larger than `n`, decoding will fail. If decoding fails, Decode
 // writes an error to the response body and returns it.
 func (c Context) DecodeLimit(v any, n int64) error {
-	if err := json.NewDecoder(io.LimitReader(c.Request.Body, n)).Decode(v); err != nil {
+	c.Request.Body = http.MaxBytesReader(c.ResponseWriter, c.Request.Body, n)
+	if err := json.NewDecoder(c.Request.Body).Decode(v); err != nil {
+		var tooLargeErr *http.MaxBytesError
+		if errors.As(err, &tooLargeErr) {
+			return c.Error(errors.New("request body too large"), http.StatusRequestEntityTooLarge)
+		}
 		return c.Error(fmt.Errorf("couldn't decode request type (%T): %w", v, err), http.StatusBadRequest)
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 // A Client provides methods for interacting with an API server.
@@ -38,7 +39,7 @@ func (c *Client) req(ctx context.Context, method string, route string, data, res
 	defer r.Body.Close()
 	if !(200 <= r.StatusCode && r.StatusCode < 300) {
 		err, _ := io.ReadAll(r.Body)
-		return errors.New(string(err))
+		return errors.New(strings.TrimSpace(string(err)))
 	}
 	if resp == nil {
 		return nil
