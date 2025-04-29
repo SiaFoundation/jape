@@ -59,10 +59,10 @@ func (c Context) Encode(v any) {
 	}
 }
 
-// DecodeLimit decodes the JSON of the request body into v. If v is larger than `max`, decoding will fail. If decoding fails, Decode
+// DecodeLimit decodes the JSON of the request body into v. If v is larger than `n`, decoding will fail. If decoding fails, Decode
 // writes an error to the response body and returns it.
-func (c Context) DecodeLimit(v any, max int64) error {
-	if err := json.NewDecoder(io.LimitReader(c.Request.Body, max)).Decode(v); err != nil {
+func (c Context) DecodeLimit(v any, n int64) error {
+	if err := json.NewDecoder(io.LimitReader(c.Request.Body, n)).Decode(v); err != nil {
 		return c.Error(fmt.Errorf("couldn't decode request type (%T): %w", v, err), http.StatusBadRequest)
 	}
 	return nil
