@@ -73,5 +73,4 @@ func TestRequestTooLarge(t *testing.T) {
 	} else if r.Bar != hex.EncodeToString(content) {
 		t.Fatalf(`expected %q, got %q`, hex.EncodeToString(content), r.Bar)
 	}
-
 }
