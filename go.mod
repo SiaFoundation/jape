@@ -1,4 +1,4 @@
-module go.sia.tech/jape // v0.13.1
+module go.sia.tech/jape // v0.14.0
 
 go 1.23.2
 
