@@ -3,6 +3,7 @@ package jape
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"reflect"
@@ -58,13 +59,26 @@ func (c Context) Encode(v any) {
 	}
 }
 
-// Decode decodes the JSON of the request body into v. If decoding fails, Decode
+// DecodeLimit decodes the JSON of the request body into v. If v is larger than `n`, decoding will fail. If decoding fails, Decode
 // writes an error to the response body and returns it.
-func (c Context) Decode(v any) error {
+func (c Context) DecodeLimit(v any, n int64) error {
+	c.Request.Body = http.MaxBytesReader(c.ResponseWriter, c.Request.Body, n)
 	if err := json.NewDecoder(c.Request.Body).Decode(v); err != nil {
+		var tooLargeErr *http.MaxBytesError
+		if errors.As(err, &tooLargeErr) {
+			return c.Error(errors.New("request body too large"), http.StatusRequestEntityTooLarge)
+		}
 		return c.Error(fmt.Errorf("couldn't decode request type (%T): %w", v, err), http.StatusBadRequest)
 	}
 	return nil
+}
+
+// Decode decodes the JSON of the request body into v. If decoding fails, Decode
+// writes an error to the response body and returns it. It is limited to 10 MB by default.
+// If the request body is larger than that, Decode will fail. If a larger limit is
+// needed, use [DecodeLimit].
+func (c Context) Decode(v any) error {
+	return c.DecodeLimit(v, 1e7) // 10 MB
 }
 
 // PathParam returns the value of a path parameter. If the parameter is

@@ -5,6 +5,7 @@ go 1.23.2
 require (
 	github.com/julienschmidt/httprouter v1.3.0
 	golang.org/x/tools v0.32.0
+	lukechampine.com/frand v1.5.1
 )
 
 require (
