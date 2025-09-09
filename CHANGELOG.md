@@ -1,3 +1,11 @@
+## 0.14.1 (2025-09-09)
+
+### Fixes
+
+#### Add Content-Length to server response
+
+##36 by @lukechampine
+
 ## 0.14.0 (2025-04-30)
 
 ### Breaking Changes
