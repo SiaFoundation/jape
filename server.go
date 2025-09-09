@@ -44,18 +44,18 @@ func (c Context) Encode(v any) {
 	case nil:
 		c.ResponseWriter.WriteHeader(http.StatusNoContent)
 	default:
-		c.ResponseWriter.Header().Set("Content-Type", "application/json")
+		var js []byte
 		// encode nil slices as [] and nil maps as {} (instead of null)
 		if val := reflect.ValueOf(v); val.Kind() == reflect.Slice && val.Len() == 0 {
-			c.ResponseWriter.Write([]byte("[]\n"))
-			return
+			js = []byte("[]\n")
 		} else if val.Kind() == reflect.Map && val.Len() == 0 {
-			c.ResponseWriter.Write([]byte("{}\n"))
-			return
+			js = []byte("{}\n")
+		} else {
+			js, _ = json.MarshalIndent(v, "", "  ")
 		}
-		enc := json.NewEncoder(c.ResponseWriter)
-		enc.SetIndent("", "  ")
-		enc.Encode(v)
+		c.ResponseWriter.Header().Set("Content-Type", "application/json")
+		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
+		c.ResponseWriter.Write(js)
 	}
 }
 
