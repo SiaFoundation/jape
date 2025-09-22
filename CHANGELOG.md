@@ -1,3 +1,10 @@
+## 0.14.1 (2025-09-22)
+
+### Fixes
+
+- Add Content-Length to server response
+- Update golang.org/x/tools from 0.32.0 to 0.37.0.
+
 ## 0.14.0 (2025-04-30)
 
 ### Breaking Changes
