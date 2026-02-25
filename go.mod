@@ -1,6 +1,6 @@
 module go.sia.tech/jape // v0.14.1
 
-go 1.26.0
+go 1.24.0
 
 require (
 	github.com/julienschmidt/httprouter v1.3.0
