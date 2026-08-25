@@ -2,7 +2,6 @@ package jape
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -10,8 +9,15 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
+
 	"github.com/julienschmidt/httprouter"
 )
+
+// json is the JSON implementation used to encode and decode all request and
+// response bodies. ConfigStd makes it a drop-in replacement for the standard
+// library's encoding/json package, but with better performance.
+var json = sonic.ConfigStd
 
 // A Context contains the values relevant to an HTTP handler.
 type Context struct {
@@ -51,7 +57,7 @@ func (c Context) Encode(v any) {
 		} else if val.Kind() == reflect.Map && val.Len() == 0 {
 			js = []byte("{}\n")
 		} else {
-			js, _ = json.MarshalIndent(v, "", "  ")
+			js, _ = json.Marshal(v)
 		}
 		c.ResponseWriter.Header().Set("Content-Type", "application/json")
 		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
