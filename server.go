@@ -57,7 +57,7 @@ func (c Context) Encode(v any) {
 		} else if val.Kind() == reflect.Map && val.Len() == 0 {
 			js = []byte("{}\n")
 		} else {
-			js, _ = sonic.Marshal(v)
+			js, _ = json.Marshal(v)
 		}
 		c.ResponseWriter.Header().Set("Content-Type", "application/json")
 		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
