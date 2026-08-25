@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/bytedance/sonic"
+
 	"github.com/julienschmidt/httprouter"
 )
 
@@ -51,7 +53,7 @@ func (c Context) Encode(v any) {
 		} else if val.Kind() == reflect.Map && val.Len() == 0 {
 			js = []byte("{}\n")
 		} else {
-			js, _ = json.MarshalIndent(v, "", "  ")
+			js, _ = sonic.Marshal(v)
 		}
 		c.ResponseWriter.Header().Set("Content-Type", "application/json")
 		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
