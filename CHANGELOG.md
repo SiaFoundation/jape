@@ -1,3 +1,11 @@
+## 0.14.2 (2026-08-25)
+
+### Fixes
+
+#### Use sonic instead of encoding/json
+
+Use bytedance's `sonic` library for encoding JSON instead of Go's standard `encoding/json`.
+
 ## 0.14.1 (2025-09-22)
 
 ### Fixes
