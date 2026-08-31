@@ -1,3 +1,9 @@
+## 0.14.3 (2026-08-31)
+
+### Fixes
+
+- Update sonic dependency to 1.15.3
+
 ## 0.14.2 (2026-08-25)
 
 ### Fixes
