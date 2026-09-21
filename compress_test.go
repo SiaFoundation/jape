@@ -38,6 +38,7 @@ func TestCompression(t *testing.T) {
 	}{
 		{"/compressed", "gzip", "gzip"},
 		{"/compressed", "zstd", "zstd"},
+		{"/compressed", "gzip, zstd", "zstd"},
 		{"/compressed", "", ""},
 		{"/uncompressed", "gzip, zstd", ""},
 	}
