@@ -42,8 +42,8 @@ func (c *Client) req(ctx context.Context, method string, route string, data, res
 	if err != nil {
 		return err
 	}
-	defer io.Copy(io.Discard, r.Body)
 	defer r.Body.Close()
+	defer io.Copy(io.Discard, r.Body)
 	if !(200 <= r.StatusCode && r.StatusCode < 300) {
 		err, _ := io.ReadAll(r.Body)
 		return errors.New(strings.TrimSpace(string(err)))
