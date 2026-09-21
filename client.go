@@ -8,7 +8,15 @@ import (
 	"io"
 	"net/http"
 	"strings"
+
+	"github.com/klauspost/compress/gzhttp"
 )
+
+// httpClient is used for every request. Its transport advertises zstd and gzip
+// support and transparently decompresses responses.
+var httpClient = &http.Client{
+	Transport: gzhttp.Transport(http.DefaultTransport),
+}
 
 // A Client provides methods for interacting with an API server.
 type Client struct {
@@ -26,11 +34,11 @@ func (c *Client) req(ctx context.Context, method string, route string, data, res
 	if err != nil {
 		panic(err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", applicationJSON)
 	if c.Password != "" {
 		req.SetBasicAuth("", c.Password)
 	}
-	r, err := http.DefaultClient.Do(req)
+	r, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
