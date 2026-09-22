@@ -7,7 +7,7 @@
 - A generic client type that speaks JSON
 - A `Context` type for handlers, with convenient methods for JSON and error handling
 - A static analyzer that ensures parity between client and server definitions
-- Opt-in zstd or gzip compression of responses, for clients that support it
+- Transparent zstd or gzip compression of responses, for clients that support it
 
 ## Usage
 

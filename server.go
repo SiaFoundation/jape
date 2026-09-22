@@ -197,8 +197,9 @@ func adaptor(h Handler) httprouter.Handle {
 
 // Mux returns an http.Handler for the provided set of routes. The map keys must
 // contain both the method and path of the route, separated by whitespace, e.g.
-// "GET /foo/:bar".
-func Mux(routes map[string]Handler) *httprouter.Router {
+// "GET /foo/:bar". Responses are compressed with zstd or gzip for clients that
+// advertise support for it.
+func Mux(routes map[string]Handler) http.Handler {
 	router := httprouter.New()
 	for path, h := range routes {
 		fs := strings.Fields(path)
@@ -225,7 +226,7 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 			panic(fmt.Sprintf("unhandled method %q", method))
 		}
 	}
-	return router
+	return compress(router)
 }
 
 // Adapt turns a http.Handler transformer into a Handler transformer, allowing
