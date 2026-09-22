@@ -16,14 +16,14 @@ func TestCompression(t *testing.T) {
 	}
 	tooSmall := []string{"below the minimum size for compression"}
 
-	srv := httptest.NewServer(Mux(map[string]Handler{
+	srv := httptest.NewServer(Compress(Mux(map[string]Handler{
 		"GET /compressed": func(c Context) {
 			c.Encode(compressible)
 		},
 		"GET /uncompressed": func(c Context) {
 			c.Encode(tooSmall)
 		},
-	}))
+	})))
 	defer srv.Close()
 
 	// this client does not advertise compression of its own accord, so that the
