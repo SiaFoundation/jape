@@ -12,6 +12,7 @@ import (
 	"github.com/bytedance/sonic"
 
 	"github.com/julienschmidt/httprouter"
+	"github.com/klauspost/compress/gzhttp"
 )
 
 // json is the JSON implementation used to encode and decode all request and
@@ -190,6 +191,20 @@ func (c Context) Custom(any, any) {}
 type Handler func(Context)
 
 func adaptor(h Handler) httprouter.Handle {
+	compress, err := gzhttp.NewWrapper(
+		gzhttp.ContentTypes([]string{
+			applicationJSON,
+			"application/cbor",
+			"application/octet-stream",
+			"text/html",
+			"text/plain",
+		}),
+		gzhttp.MinSize(1024),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("invalid compression options: %v", err))
+	}
+	h = Adapt(func(h http.Handler) http.Handler { return compress(h) })(h)
 	return func(w http.ResponseWriter, req *http.Request, ps httprouter.Params) {
 		h(Context{ResponseWriter: w, Request: req, PathParams: ps})
 	}
@@ -199,7 +214,7 @@ func adaptor(h Handler) httprouter.Handle {
 // contain both the method and path of the route, separated by whitespace, e.g.
 // "GET /foo/:bar". Responses are compressed with zstd or gzip for clients that
 // advertise support for it.
-func Mux(routes map[string]Handler) http.Handler {
+func Mux(routes map[string]Handler) *httprouter.Router {
 	router := httprouter.New()
 	for path, h := range routes {
 		fs := strings.Fields(path)
@@ -226,7 +241,7 @@ func Mux(routes map[string]Handler) http.Handler {
 			panic(fmt.Sprintf("unhandled method %q", method))
 		}
 	}
-	return compress(router)
+	return router
 }
 
 // Adapt turns a http.Handler transformer into a Handler transformer, allowing
