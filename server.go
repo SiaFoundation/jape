@@ -19,6 +19,9 @@ import (
 // library's encoding/json package, but with better performance.
 var json = sonic.ConfigStd
 
+// applicationJSON is the content type of jape request and response bodies.
+const applicationJSON = "application/json"
+
 // A Context contains the values relevant to an HTTP handler.
 type Context struct {
 	ResponseWriter http.ResponseWriter
@@ -59,7 +62,7 @@ func (c Context) Encode(v any) {
 		} else {
 			js, _ = json.Marshal(v)
 		}
-		c.ResponseWriter.Header().Set("Content-Type", "application/json")
+		c.ResponseWriter.Header().Set("Content-Type", applicationJSON)
 		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
 		c.ResponseWriter.Write(js)
 	}
@@ -194,8 +197,9 @@ func adaptor(h Handler) httprouter.Handle {
 
 // Mux returns an http.Handler for the provided set of routes. The map keys must
 // contain both the method and path of the route, separated by whitespace, e.g.
-// "GET /foo/:bar".
-func Mux(routes map[string]Handler) *httprouter.Router {
+// "GET /foo/:bar". Responses are compressed with zstd or gzip for clients that
+// advertise support for it.
+func Mux(routes map[string]Handler) http.Handler {
 	router := httprouter.New()
 	for path, h := range routes {
 		fs := strings.Fields(path)
@@ -222,7 +226,7 @@ func Mux(routes map[string]Handler) *httprouter.Router {
 			panic(fmt.Sprintf("unhandled method %q", method))
 		}
 	}
-	return router
+	return compress(router)
 }
 
 // Adapt turns a http.Handler transformer into a Handler transformer, allowing

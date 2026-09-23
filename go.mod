@@ -5,6 +5,7 @@ go 1.26.0
 require (
 	github.com/bytedance/sonic v1.15.4
 	github.com/julienschmidt/httprouter v1.3.0
+	github.com/klauspost/compress v1.20.0
 	golang.org/x/tools v0.50.0
 	lukechampine.com/frand v1.5.1
 )
