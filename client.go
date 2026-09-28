@@ -27,7 +27,7 @@ type Client struct {
 func (c *Client) req(ctx context.Context, method string, route string, data, resp interface{}) error {
 	var body io.Reader
 	if data != nil {
-		js, _ := json.Marshal(data)
+		js, _ := marshalJSON(data)
 		body = bytes.NewReader(js)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, fmt.Sprintf("%v%v", c.BaseURL, route), body)
@@ -51,7 +51,7 @@ func (c *Client) req(ctx context.Context, method string, route string, data, res
 	if resp == nil {
 		return nil
 	}
-	return json.NewDecoder(r.Body).Decode(resp)
+	return decodeJSON(r.Body, resp)
 }
 
 // GET performs a GET request, decoding the response into r.
