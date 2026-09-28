@@ -2,23 +2,42 @@ package jape
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/bytedance/sonic"
-
 	"github.com/julienschmidt/httprouter"
 	"github.com/klauspost/compress/gzhttp"
+	"golang.org/x/sys/cpu"
 )
 
-// json is the JSON implementation used to encode and decode all request and
-// response bodies. ConfigStd makes it a drop-in replacement for the standard
-// library's encoding/json package, but with better performance.
-var json = sonic.ConfigStd
+// useSonic is false on amd64 CPUs without PCLMULQDQ, which sonic uses without
+// checking for support. On those CPUs, encoding/json is used instead.
+var useSonic = runtime.GOARCH != "amd64" || cpu.X86.HasPCLMULQDQ
+
+// marshalJSON returns the JSON encoding of v. ConfigStd makes sonic a drop-in
+// replacement for encoding/json, but with better performance.
+func marshalJSON(v any) ([]byte, error) {
+	if useSonic {
+		return sonic.ConfigStd.Marshal(v)
+	}
+	return json.Marshal(v)
+}
+
+// decodeJSON decodes the JSON value read from r into v.
+func decodeJSON(r io.Reader, v any) error {
+	if useSonic {
+		return sonic.ConfigStd.NewDecoder(r).Decode(v)
+	}
+	return json.NewDecoder(r).Decode(v)
+}
 
 // applicationJSON is the content type of jape request and response bodies.
 const applicationJSON = "application/json"
@@ -61,7 +80,7 @@ func (c Context) Encode(v any) {
 		} else if val.Kind() == reflect.Map && val.Len() == 0 {
 			js = []byte("{}\n")
 		} else {
-			js, _ = json.Marshal(v)
+			js, _ = marshalJSON(v)
 		}
 		c.ResponseWriter.Header().Set("Content-Type", applicationJSON)
 		c.ResponseWriter.Header().Set("Content-Length", strconv.Itoa(len(js)))
@@ -73,7 +92,7 @@ func (c Context) Encode(v any) {
 // writes an error to the response body and returns it.
 func (c Context) DecodeLimit(v any, n int64) error {
 	c.Request.Body = http.MaxBytesReader(c.ResponseWriter, c.Request.Body, n)
-	if err := json.NewDecoder(c.Request.Body).Decode(v); err != nil {
+	if err := decodeJSON(c.Request.Body, v); err != nil {
 		var tooLargeErr *http.MaxBytesError
 		if errors.As(err, &tooLargeErr) {
 			return c.Error(errors.New("request body too large"), http.StatusRequestEntityTooLarge)

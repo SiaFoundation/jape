@@ -79,3 +79,7 @@ jobs:
 ```
 
 It can also be added as a job within your existing workflow, like in [renterd](https://github.com/SiaFoundation/renterd/blob/master/.github/workflows/test.yml#L50).
+
+## JSON encoding
+
+`jape` uses bytedance's [sonic](https://github.com/bytedance/sonic) library to encode and decode JSON. sonic crashes on older amd64 CPUs without the PCLMULQDQ instruction, so on those CPUs `jape` automatically falls back to Go's standard `encoding/json`.
