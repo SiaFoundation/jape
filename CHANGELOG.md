@@ -1,3 +1,23 @@
+## 0.14.4 (2026-09-29)
+
+### Features
+
+#### Add compression by default if client supports it
+
+Wrap both client and server handler using `github.com/klauspost/compress/gzhttp`. `Mux` now returns `http.Handler` (compressed wrapper) instead of `*httprouter.Router`.
+
+### Fixes
+
+#### Fall back to encoding/json on CPUs without PCLMULQDQ
+
+bytedance's `sonic` library uses the PCLMULQDQ instruction without checking for support, crashing older amd64 CPUs that do not have it. On those CPUs, jape now uses Go's standard `encoding/json` instead.
+
+#### restore Mux return type
+
+##56 by @lukechampine
+
+##54 broke compatibility by changing the return type of `Mux`. This PR restores it, by inlining the gzhttp wrapping into `adaptor`.
+
 ## 0.14.3 (2026-08-31)
 
 ### Fixes
