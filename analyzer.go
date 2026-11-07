@@ -439,8 +439,11 @@ func checkSingleResponse(kv *ast.KeyValueExpr, pass *analysis.Pass) {
 			}
 		}
 
-		if len(b.Succs) == 2 && len(b.Nodes) != 0 {
-			cond := b.Nodes[len(b.Nodes)-1].(ast.Expr)
+		var cond ast.Expr
+		if len(b.Nodes) != 0 {
+			cond, _ = b.Nodes[len(b.Nodes)-1].(ast.Expr)
+		}
+		if len(b.Succs) == 2 && cond != nil {
 			if !containsWrite(cond) {
 				checkBlock(b.Succs[0], prevWrite)
 				checkBlock(b.Succs[1], prevWrite)
